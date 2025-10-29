@@ -1,94 +1,55 @@
-# new-project-template
-A template repo for new CL projects
+# Classifier Experiments
 
-# {{NEW-PROJECT}}
+Classifier Experiments is a toolkit for developing docket classification pipelines.
 
-{{NEW-PROJECT}} is an open source repository to ...
-It was built for use with Courtlistener.com.
+## Documentation
 
-Its main goal is to ...
-It incldues mechanisms to ...
+See the [quickstart](#quickstart) below. For more detail, check out the documentation for the core modules:
 
-Further development is intended and all contributors, corrections and additions are welcome.
-
-## Background
-
-Free Law Project built this ...  This project represents ...  
-We believe to be the ....
-
-## Quickstart
-
-You can feed in a X as ... .. ...
-
-```
-IMPORTS
-
-CALL EXAMPLE
-
-returns:
-  ""EXAMPLE OUTPUT
-```
-
-
-
-## Some Notes ...
-Somethings to keep in mind as ....
-
-1. ...
-2. ...
-
-
-## Fields
-
-1. `id` ==> string; Courtlistener Court Identifier
-2. `court_url` ==> string; url for court website
-3. `regex` ==>  array; regexes patterns to find courts
-
+* [CLI Commands](clx/cli)
+* [Docket Viewer Application](clx/app)
+* [Training and Inference Pipelines](clx/ml)
+* [LLM Tools](clx/llm)
 
 ## Installation
 
-Installing {{NEW-PROJECT}} is easy.
+To install the `clx` package, first clone this repo:
 
-```sh
-pip install {{NEW-PROJECT}}
+```bash
+git clone https://github.com/freelawproject/classifier-experiments
+cd classifier-experiments
 ```
 
+Then you can install with [uv](https://docs.astral.sh/uv/getting-started/installation/) or [pip](https://pip.pypa.io/en/stable/getting-started/):
 
-Or install the latest dev version from github
+* Using `uv`:
+    ```bash
+    uv sync
+    ```
+    Use `uv sync --extra dev` to install development dependencies.
 
-```sh
-pip install git+https://github.com/freelawproject/{{NEW-PROJECT}}.git@master
-```
+* Using `pip`:
+   ```bash
+   pip install -e .
+   ```
+   Use `pip install -e '.[dev]'` to install development dependencies.
 
-## Future
+## Configuration
 
-1) Continue to improve ...
-2) Future updates
+The package can be configured through environment variables or a `.env` file. See [`.env.example`](.env.example) for a complete list of configuration options.
 
-## Deployment
+## Quickstart
 
-If you wish to create a new version manually, the process is:
+TODO
 
-1. Update version info in `setup.py`
-
-2. Install the requirements using `poetry install`
-
-3. Set up a config file at `~/.pypirc`
-
-4. Generate a universal distribution that works in py2 and py3 (see setup.cfg)
-
-```sh
-python setup.py sdist bdist_wheel
-```
-
-5. Upload the distributions
-
-```sh
-twine upload dist/* -r pypi (or pypitest)
+```python
+import clx
 ```
 
 ## License
 
 This repository is available under the permissive BSD license, making it easy and safe to incorporate in your own libraries.
 
-Pull and feature requests welcome. Online editing in GitHub is possible (and easy!)
+## Requirements
+
+- Python 3.13+
