@@ -5,9 +5,9 @@ requires = [
 ]
 
 [project]
-name = "{{PROJECT_NAME}}"
+name = "clx"
 version = "0.0.1"
-description = "{{PROJECT_DESCRIPTION}}"
+description = "Toolkit for running experiments and developing classifiers."
 authors = [{ name = "Free Law Project", email = "info@free.law" }]
 requires-python = ">=3.13"
 readme = "README.md"
@@ -29,13 +29,32 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
-urls.Repository = "https://github.com/freelawproject/{{PROJECT_NAME}}"
+urls.Repository = "https://github.com/freelawproject/classifier-experiments"
 urls."Organisation Homepage" = "https://free.law/"
 
+dependencies = [
+  "boto3>=1.28.57",
+  "click>=8.3.0",
+  "django>=5.2.7",
+  "litellm>=1.79.0",
+  "python-dotenv>=1.2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pre-commit>=4.3.0",
+]
+
+[project.scripts]
+clx = "clx:cli.cli"
+
 [tool.setuptools]
-packages = [ "project_name" ]
+packages = [ "clx" ]
 
 [tool.ruff]
+lint.isort.known-first-party = [
+    "ctx",
+]
 line-length = 79
 lint.extend-safe-fixes = [
   # non-pep585-annotation
@@ -73,3 +92,9 @@ lint.ignore = [
   # printf-string-formatting
   "UP031",
 ]
+
+[tool.mypy]
+plugins = ["mypy_django_plugin.main"]
+
+[tool.django-stubs]
+django_settings_module = "clx.settings"
