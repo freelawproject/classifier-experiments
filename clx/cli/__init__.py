@@ -1,6 +1,7 @@
 from click import group
 
 from .hello import hello
+from .manage import manage
 
 
 @group()
@@ -10,3 +11,4 @@ def cli():
 
 
 cli.add_command(hello)
+cli.add_command(manage)
