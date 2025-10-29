@@ -46,6 +46,20 @@ TODO
 import clx
 ```
 
+## Development
+
+Be sure to run `pre-commit` before committing your changes.
+
+```bash
+pre-commit install
+```
+
+Or you can run `pre-commit` manually before committing your changes:
+
+```bash
+pre-commit run --all-files
+```
+
 ## License
 
 This repository is available under the permissive BSD license, making it easy and safe to incorporate in your own libraries.
