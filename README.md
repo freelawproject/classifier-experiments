@@ -40,10 +40,11 @@ The package can be configured through environment variables or a `.env` file. Se
 
 ## Quickstart
 
-TODO
-
 ```python
-import clx
+# Using models outside of Django
+from clx.models import DocketEntry
+
+print(DocketEntry.objects.all().count())
 ```
 
 ## Development

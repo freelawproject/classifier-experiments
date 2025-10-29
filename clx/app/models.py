@@ -1,5 +1,5 @@
 from django.db import models
 
 
-class DocketEntries(models.Model):
+class DocketEntry(models.Model):
     recap_id = models.IntegerField()
