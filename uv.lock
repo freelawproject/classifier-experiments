@@ -239,6 +239,8 @@ dependencies = [
     { name = "django" },
     { name = "litellm" },
     { name = "python-dotenv" },
+    { name = "requests" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -254,6 +256,8 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.79.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.3.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "requests", specifier = ">=2.32.5" },
+    { name = "tqdm", specifier = ">=4.67.1" },
 ]
 
 [[package]]
