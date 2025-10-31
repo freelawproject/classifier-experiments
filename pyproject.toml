@@ -38,6 +38,8 @@ dependencies = [
   "django>=5.2.7",
   "litellm>=1.79.0",
   "python-dotenv>=1.2.1",
+  "requests>=2.32.5",
+  "tqdm>=4.67.1",
 ]
 
 [project.optional-dependencies]
