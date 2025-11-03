@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import django
+import pandas as pd
 import requests
 from tqdm import tqdm
 
@@ -10,6 +11,14 @@ from tqdm import tqdm
 def init_django():
     os.environ["DJANGO_SETTINGS_MODULE"] = "clx.settings"
     django.setup()
+
+
+def pd_save_or_append(data: pd.DataFrame, path: str | Path):
+    """Save or append pandas dataframe to csv file."""
+    if path.exists():
+        data.to_csv(path, index=False, mode="a", header=False)
+    else:
+        data.to_csv(path, index=False)
 
 
 def download_file(

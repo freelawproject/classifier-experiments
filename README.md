@@ -10,6 +10,7 @@ See the [quickstart](#quickstart) below. For more detail, check out the document
 * [Docket Viewer Application](clx/app)
 * [Training and Inference Pipelines](clx/ml)
 * [LLM Tools](clx/llm)
+* [Local Data Overview](clx/data)
 
 ## Installation
 
