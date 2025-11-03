@@ -133,6 +133,9 @@ def create_docket_index():
     sample = sample.drop_duplicates(subset=["id"])
     sample = sample[["id", "filing_year", "num_documents"]]
     sample.to_csv(SAMPLE_INDEX_PATH, index=False)
+    print(f"Saved docket index to {SAMPLE_INDEX_PATH}")
+    print(f"Number of unique dockets: {sample['id'].nunique()}")
+    print(f"Number of docket entries: {sample['num_documents'].sum()}")
 
 
 @click.command()
