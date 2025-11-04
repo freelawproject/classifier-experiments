@@ -62,6 +62,12 @@ Or you can run `pre-commit` manually before committing your changes:
 pre-commit run --all-files
 ```
 
+Run the tests with:
+
+```bash
+uv run -m unittest
+```
+
 ## License
 
 This repository is available under the permissive BSD license, making it easy and safe to incorporate in your own libraries.
