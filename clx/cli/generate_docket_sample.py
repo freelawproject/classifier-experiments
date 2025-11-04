@@ -1,7 +1,10 @@
 import os
+import time
+import urllib.parse
 
 import click
 import pandas as pd
+import requests
 from tqdm import tqdm
 
 from clx import download_file, extract_bz2_file, pd_save_or_append
@@ -18,6 +21,7 @@ REDUCED_DATA_PATH = (
     LOCAL_DATA_DIR / "docket_sample" / "recap_dockets_reduced.csv"
 )
 SAMPLE_INDEX_PATH = LOCAL_DATA_DIR / "docket_sample" / "docket_index.csv"
+DOCKET_SAMPLE_DIR = LOCAL_DATA_DIR / "docket_sample" / "sample"
 
 
 def get_crude_case_type(docket_number):
@@ -138,6 +142,108 @@ def create_docket_index():
     print(f"Number of docket entries: {sample['num_documents'].sum()}")
 
 
+def get_with_retry(url, headers, max_retries=3, sleep=30):
+    """Get a URL with retry and sleep."""
+    exception = None
+    for _ in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            print(f"Error getting {url}: {e}")
+            print(f"Sleeping for {sleep} seconds...")
+            exception = e
+            time.sleep(sleep)
+    raise exception
+
+
+def collect_docket_data(docket_id, progress):
+    """Download a docket from CourtListener."""
+    time.sleep(0.1)
+    cl_token = os.getenv("CL_TOKEN")
+    assert cl_token is not None, "CL_TOKEN is not set"
+    headers = {"Authorization": f"Token {cl_token}"}
+
+    base_url = "https://www.courtlistener.com/api/rest/v4/search/"
+    query = {
+        "q": f"docket_id:{docket_id}",
+        "type": "rd",
+        "order_by": "entry_date_filed asc",
+    }
+    url = base_url + "?" + urllib.parse.urlencode(query, safe=":")
+
+    page_data = get_with_retry(url, headers)
+    progress.update(len(page_data["results"]))
+    data = page_data["results"]
+    while page_data["next"]:
+        page_data = get_with_retry(page_data["next"], headers)
+        progress.update(len(page_data["results"]))
+        data.extend(page_data["results"])
+    data = pd.DataFrame(data)
+    data = data[
+        [
+            "absolute_url",
+            "attachment_number",
+            "cites",
+            "description",
+            "docket_entry_id",
+            "docket_id",
+            "document_number",
+            "document_type",
+            "entry_date_filed",
+            "entry_number",
+            "filepath_local",
+            "id",
+            "is_available",
+            "meta",
+            "pacer_doc_id",
+            "page_count",
+            "short_description",
+            "snippet",
+        ]
+    ]
+    return data
+
+
+def get_sample_year_path(year):
+    return DOCKET_SAMPLE_DIR / f"{year}.csv"
+
+
+def download_docket_sample():
+    DOCKET_SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
+
+    docket_index = pd.read_csv(SAMPLE_INDEX_PATH)
+    docket_index = docket_index.sort_values(
+        by="num_documents", ascending=False
+    )
+
+    total_entries = docket_index["num_documents"].sum()
+
+    years = docket_index["filing_year"].unique()
+    for year in years:
+        year_path = get_sample_year_path(year)
+        if year_path.exists():
+            existing_ids = pd.read_csv(year_path, usecols=["id"])
+            docket_index = docket_index[
+                ~docket_index["id"].isin(existing_ids["id"])
+            ]
+
+    if len(docket_index) > 0:
+        remaining_entries = docket_index["num_documents"].sum()
+        print(f"{total_entries - remaining_entries} entries downloaded so far")
+        progress = tqdm(
+            desc="Downloading docket sample",
+            total=remaining_entries,
+            unit=" entries",
+        )
+        for row in docket_index.to_dict("records"):
+            docket_data = collect_docket_data(row["id"], progress)
+            year_path = get_sample_year_path(row["filing_year"])
+            pd_save_or_append(docket_data, year_path)
+        progress.close()
+
+
 @click.command()
 def generate_docket_sample():
     """Prepare a sample of dockets for use in the application."""
@@ -164,3 +270,5 @@ def generate_docket_sample():
         # Create the docket index
         print("Creating docket index...")
         create_docket_index()
+
+    download_docket_sample()
