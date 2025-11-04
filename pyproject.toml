@@ -35,12 +35,15 @@ urls."Organisation Homepage" = "https://free.law/"
 dependencies = [
   "boto3>=1.28.57",
   "click>=8.3.0",
+  "datasets>=4.3.0",
   "django>=5.2.7",
-  "litellm>=1.79.0",
+  "litellm>=1.79.1",
   "pandas>=2.3.3",
   "python-dotenv>=1.2.1",
   "requests>=2.32.5",
+  "scikit-learn>=1.7.2",
   "tqdm>=4.67.1",
+  "transformers[torch]>=4.57.1",
 ]
 
 [project.optional-dependencies]
