@@ -1,10 +1,12 @@
 from pathlib import Path
 
 from .classification_run import ClassificationRun
+from .multi_label_classification_run import MultiLabelClassificationRun
 from .training_run import TrainingRun
 
 task_registry = [
     ClassificationRun,
+    MultiLabelClassificationRun,
 ]
 
 
@@ -24,4 +26,10 @@ def training_run(
     )
 
 
-__all__ = ["training_run", "task_registry", "TrainingRun", "ClassificationRun"]
+__all__ = [
+    "training_run",
+    "task_registry",
+    "TrainingRun",
+    "ClassificationRun",
+    "MultiLabelClassificationRun",
+]
