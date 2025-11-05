@@ -142,25 +142,29 @@ def create_docket_index():
     print(f"Number of docket entries: {sample['num_documents'].sum()}")
 
 
-def get_with_retry(url, headers, max_retries=3, sleep=30):
+def get_with_retry(url, headers, max_retries=3, sleep=10, rate_limit_sleep=90):
     """Get a URL with retry and sleep."""
-    exception = None
     for _ in range(max_retries):
         try:
             response = requests.get(url, headers=headers)
+            if response.status_code == 429:
+                print(
+                    f"Rate limit exceeded, sleeping for {rate_limit_sleep} seconds..."
+                )
+                time.sleep(rate_limit_sleep)
+                continue
             response.raise_for_status()
             return response.json()
-        except requests.RequestException as e:
+        except Exception as e:
             print(f"Error getting {url}: {e}")
             print(f"Sleeping for {sleep} seconds...")
-            exception = e
             time.sleep(sleep)
-    raise exception
+    raise Exception(f"Too many retries for {url}")
 
 
 def collect_docket_data(docket_id, progress):
     """Download a docket from CourtListener."""
-    time.sleep(0.1)
+    time.sleep(0.3)
     cl_token = os.getenv("CL_TOKEN")
     assert cl_token is not None, "CL_TOKEN is not set"
     headers = {"Authorization": f"Token {cl_token}"}
@@ -177,6 +181,7 @@ def collect_docket_data(docket_id, progress):
     progress.update(len(page_data["results"]))
     data = page_data["results"]
     while page_data["next"]:
+        time.sleep(0.3)
         page_data = get_with_retry(page_data["next"], headers)
         progress.update(len(page_data["results"]))
         data.extend(page_data["results"])
@@ -224,9 +229,10 @@ def download_docket_sample():
     for year in years:
         year_path = get_sample_year_path(year)
         if year_path.exists():
-            existing_ids = pd.read_csv(year_path, usecols=["id"])
+            existing_ids = pd.read_csv(year_path, usecols=["docket_id"])
+            existing_ids = existing_ids.drop_duplicates()
             docket_index = docket_index[
-                ~docket_index["id"].isin(existing_ids["id"])
+                ~docket_index["id"].isin(existing_ids["docket_id"])
             ]
 
     if len(docket_index) > 0:
