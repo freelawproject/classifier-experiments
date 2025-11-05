@@ -54,17 +54,6 @@ The `train_data` and optional `eval_data` sent to `run.train` should be a pandas
 | "banana" | "fruit" |
 | "cat" | "animal" |
 
-**Example:**
-
-```python
-import pandas as pd
-
-data = pd.DataFrame({
-    "text": ["apple", "banana", "cat"],
-    "label": ["fruit", "fruit", "animal"],
-})
-```
-
 **Training:**
 
 Initialization requires a list of `label_names`.
@@ -98,7 +87,47 @@ Output:
 
 #### Multi-label Classification
 
-TODO
+**Data Format:**
+
+| text | label |
+|------|-----|
+| "apple" | ["fruit", "red"] |
+| "banana" | ["fruit", "yellow"] |
+| "sun" | ["yellow"] |
+
+**Training:**
+
+Initialization requires a list of `label_names`.
+
+```python
+import pandas as pd
+from clx.ml import training_run
+
+data = pd.DataFrame({
+    "text": ["apple", "banana", "sun"],
+    "label": [["fruit", "red"], ["fruit", "yellow"], ["yellow"]],
+})
+run = training_run("multi-label-classification", "my-run-name", label_names=["fruit", "red", "yellow"])
+run.train(data)
+```
+
+**Inference:**
+
+Predict outputs a dictionary mapping label names to scores for each example.
+
+```python
+run = training_run(load=LOCAL_DATA_DIR / "runs" / "my-run-name")
+preds = run.predict(data["text"].tolist(), batch_size=8)
+print(preds)
+
+"""
+Output:
+[
+    {'fruit': 0.95, 'red': 0.95, 'yellow': 0.02},
+    {'fruit': 0.9, 'red': 0.15, 'yellow': 0.9},
+    {'fruit': 0.25, 'red': 0.05, 'yellow': 0.85},
+]
+```
 
 ### Creating a new Training Run
 
