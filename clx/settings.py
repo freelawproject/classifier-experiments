@@ -6,7 +6,6 @@ from django.core.management.utils import get_random_secret_key
 BASE_DIR = Path(__file__).resolve().parent
 LOCAL_DATA_DIR = Path(os.getenv("LOCAL_DATA_DIR", BASE_DIR.parent / "data"))
 
-# Django settings
 SECRET_KEY = os.getenv("SECRET_KEY", get_random_secret_key())
 DEBUG = os.getenv("DEBUG", "off") == "on"
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")

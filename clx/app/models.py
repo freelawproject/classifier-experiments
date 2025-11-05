@@ -17,11 +17,12 @@ class BaseModel(models.Model):
 class DocketEntry(BaseModel):
     """Docket entry model for main document entries."""
 
-    entry_id = models.IntegerField(primary_key=True)
+    entry_id = models.IntegerField(unique=True)
     docket_id = models.IntegerField()
-    document_number = models.IntegerField(null=True, blank=True)
+    entry_number = models.IntegerField(null=True, blank=True)
     date_filed = models.DateField()
     text = models.TextField()
+    shuffle_sort = models.IntegerField()
 
     objects = CopyManager()
 
@@ -29,8 +30,9 @@ class DocketEntry(BaseModel):
 class DocketEntryShortText(BaseModel):
     """Model for attachments and docket entry short descriptions."""
 
-    text = models.TextField()
+    text = models.TextField(unique=True)
     count = models.IntegerField()
+    shuffle_sort = models.IntegerField()
 
     objects = CopyManager()
 
