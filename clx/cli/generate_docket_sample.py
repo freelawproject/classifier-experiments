@@ -25,12 +25,13 @@ BULK_DOCKETS_URL = os.getenv(
 )
 BULK_DATA_ZIP_PATH = DATA_DIR / "docket_sample" / "recap_dockets.csv.bz2"
 BULK_DATA_PATH = DATA_DIR / "docket_sample" / "recap_dockets.csv"
-COVERAGE_DATA_URL = "https://media.githubusercontent.com/media/freelawproject/classifier-experiments/refs/heads/main/data/docket_sample/document_coverage.csv"
+COVERAGE_DATA_URL = "https://media.githubusercontent.com/media/freelawproject/classifier-experiments/refs/heads/data/home/data/docket_sample/document_coverage.csv"
 COVERAGE_DATA_PATH = DATA_DIR / "docket_sample" / "document_coverage.csv"
 REDUCED_DATA_PATH = DATA_DIR / "docket_sample" / "recap_dockets_reduced.csv"
-SAMPLE_INDEX_URL = "https://media.githubusercontent.com/media/freelawproject/classifier-experiments/refs/heads/main/data/docket_sample/docket_index.csv"
+SAMPLE_INDEX_URL = "https://media.githubusercontent.com/media/freelawproject/classifier-experiments/refs/heads/data/home/data/docket_sample/docket_index.csv"
 SAMPLE_INDEX_PATH = DATA_DIR / "docket_sample" / "docket_index.csv"
-DOCKET_SAMPLE_DIR = DATA_DIR / "docket_sample" / "sample"
+DOCKET_SAMPLE_URL = ""
+DOCKET_SAMPLE_PATH = DATA_DIR / "docket_sample" / "docket_sample.csv"
 
 
 def get_crude_case_type(docket_number):
@@ -98,8 +99,8 @@ def get_sample_from_reduced_data(
     return sample.reset_index(drop=True)
 
 
-def create_docket_index():
-    """Apply sampling strategies to generate the docket index."""
+def create_docket_index_from_reduced_data():
+    """Apply sampling strategies to reduced data to generate the docket index."""
     reduced_data = pd.read_csv(REDUCED_DATA_PATH)
     most_entries_available = reduced_data[
         reduced_data["num_main_available"] / reduced_data["num_main_documents"]
@@ -151,6 +152,36 @@ def create_docket_index():
     print(f"Saved docket index to {SAMPLE_INDEX_PATH}")
     print(f"Number of unique dockets: {sample['id'].nunique()}")
     print(f"Number of docket entries: {sample['num_documents'].sum()}")
+
+
+def create_docket_index_from_scratch():
+    """The full flow to create the docket index from scratch."""
+    if not REDUCED_DATA_PATH.exists():
+        if not COVERAGE_DATA_PATH.exists():
+            # Download coverage data
+            print("Downloading coverage data...")
+            download_file(COVERAGE_DATA_URL, COVERAGE_DATA_PATH)
+        if not BULK_DATA_PATH.exists():
+            if not BULK_DATA_ZIP_PATH.exists():
+                # Download the bulk dockets data
+                print(
+                    f"Downloading bulk dockets data to {BULK_DATA_ZIP_PATH}\nThis may take a while..."
+                )
+                download_file(BULK_DOCKETS_URL, BULK_DATA_ZIP_PATH)
+
+            # Extract the bulk dockets data
+            print(
+                f"Extracting {BULK_DATA_ZIP_PATH} to {BULK_DATA_PATH}\nThis may take a while..."
+            )
+            extract_bz2_file(BULK_DATA_ZIP_PATH, BULK_DATA_PATH)
+
+        # Reduce the bulk dockets data
+        print("Reduce and preprocess bulk dockets data...")
+        reduce_bulk_data()
+
+    # Create the docket index
+    print("Creating docket index...")
+    create_docket_index_from_reduced_data()
 
 
 def get_with_retry(url, headers, max_retries=3, sleep=10, rate_limit_sleep=90):
@@ -222,13 +253,7 @@ def download_single_docket_data(docket_id, progress):
     return data
 
 
-def get_sample_year_path(year):
-    return DOCKET_SAMPLE_DIR / f"{year}.csv"
-
-
 def download_docket_sample():
-    DOCKET_SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
-
     docket_index = pd.read_csv(SAMPLE_INDEX_PATH)
     docket_index = docket_index.sort_values(
         by="num_documents", ascending=False
@@ -236,15 +261,12 @@ def download_docket_sample():
 
     total_entries = docket_index["num_documents"].sum()
 
-    years = docket_index["filing_year"].unique()
-    for year in years:
-        year_path = get_sample_year_path(year)
-        if year_path.exists():
-            existing_ids = pd.read_csv(year_path, usecols=["docket_id"])
-            existing_ids = existing_ids.drop_duplicates()
-            docket_index = docket_index[
-                ~docket_index["id"].isin(existing_ids["docket_id"])
-            ]
+    if DOCKET_SAMPLE_PATH.exists():
+        existing_ids = pd.read_csv(DOCKET_SAMPLE_PATH, usecols=["docket_id"])
+        existing_ids = existing_ids.drop_duplicates()
+        docket_index = docket_index[
+            ~docket_index["id"].isin(existing_ids["docket_id"])
+        ]
 
     if len(docket_index) > 0:
         remaining_entries = docket_index["num_documents"].sum()
@@ -256,9 +278,9 @@ def download_docket_sample():
         )
         for row in docket_index.to_dict("records"):
             docket_data = download_single_docket_data(row["id"], progress)
-            year_path = get_sample_year_path(row["filing_year"])
-            pd_save_or_append(docket_data, year_path)
+            pd_save_or_append(docket_data, DOCKET_SAMPLE_PATH)
         progress.close()
+    print(f"All docket sample data downloaded to {DOCKET_SAMPLE_PATH}")
 
 
 def parse_attachments(text):
@@ -282,108 +304,101 @@ def parse_attachments(text):
 def import_docket_sample(batch_size=100000):
     from clx.models import DocketEntry
 
-    docket_index = pd.read_csv(SAMPLE_INDEX_PATH)
-    years = docket_index["filing_year"].unique()
+    total_entries = pd.read_csv(SAMPLE_INDEX_PATH)["num_documents"].sum()
+
     shorts = pd.DataFrame(columns=["text", "text_type", "count"])
-    for year in tqdm(years, desc="Importing docket sample"):
-        year_path = get_sample_year_path(year)
-        if year_path.exists():
-            for data in pd.read_csv(year_path, chunksize=batch_size):
-                data["timestamp"] = pd.to_datetime(
-                    data["meta"].apply(
-                        lambda x: ast.literal_eval(x)["timestamp"]
-                    ),
-                    format="mixed",
+    progress = tqdm(
+        desc="Importing docket sample", total=total_entries, unit=" entries"
+    )
+    for data in pd.read_csv(DOCKET_SAMPLE_PATH, chunksize=batch_size):
+        progress.update(len(data))
+        data["timestamp"] = pd.to_datetime(
+            data["meta"].apply(lambda x: ast.literal_eval(x)["timestamp"]),
+            format="mixed",
+        )
+        # Filter to only PACER documents, we will extract attachments with regex
+        data = data[data["document_type"] == "PACER Document"]
+        # Get the short descriptions before dropping where description is null
+        short_data = data[["short_description"]].dropna()
+        if len(short_data) > 0:
+            short_data = short_data.rename(
+                columns={"short_description": "text"}
+            )
+            short_data = short_data["text"].value_counts().reset_index()
+            short_data.columns = ["text", "update_count"]
+            short_data["text_type"] = "short_description"
+            shorts = shorts.merge(
+                short_data, on=["text", "text_type"], how="outer"
+            )
+            shorts["count"] = shorts["count"].fillna(0) + shorts[
+                "update_count"
+            ].fillna(0)
+            shorts = shorts.drop(columns=["update_count"])
+        data = data.dropna(subset="description")
+        if len(data) > 0:
+            # Rare, but sometimes there are duplicates for main documents, keep the most recent
+            data = data.sort_values(by="timestamp", ascending=False)
+            data = data.drop_duplicates(
+                subset=["docket_entry_id"], keep="first"
+            )
+            # Simplify main document text and extract attachment text
+            data["text"], data["attachments"] = zip(
+                *data["description"].apply(parse_attachments)
+            )
+            # Add attachments to shorts
+            attachments = data[["attachments"]].explode("attachments").dropna()
+            if len(attachments) > 0:
+                attachments["text"] = attachments["attachments"].apply(
+                    lambda x: x["attachment_description"]
                 )
-                # Filter to only PACER documents, we will extract attachments with regex
-                data = data[data["document_type"] == "PACER Document"]
-                # Get the short descriptions before dropping where description is null
-                short_data = data[["short_description"]].dropna()
-                if len(short_data) > 0:
-                    short_data = short_data.rename(
-                        columns={"short_description": "text"}
-                    )
-                    short_data = (
-                        short_data["text"].value_counts().reset_index()
-                    )
-                    short_data.columns = ["text", "update_count"]
-                    short_data["text_type"] = "short_description"
-                    shorts = shorts.merge(
-                        short_data, on=["text", "text_type"], how="outer"
-                    )
-                    shorts["count"] = shorts["count"].fillna(0) + shorts[
-                        "update_count"
-                    ].fillna(0)
-                    shorts = shorts.drop(columns=["update_count"])
-                data = data.dropna(subset="description")
-                if len(data) > 0:
-                    # Rare, but sometimes there are duplicates for main documents, keep the most recent
-                    data = data.sort_values(by="timestamp", ascending=False)
-                    data = data.drop_duplicates(
-                        subset=["docket_entry_id"], keep="first"
-                    )
-                    # Simplify main document text and extract attachment text
-                    data["text"], data["attachments"] = zip(
-                        *data["description"].apply(parse_attachments)
-                    )
-                    # Add attachments to shorts
-                    attachments = (
-                        data[["attachments"]].explode("attachments").dropna()
-                    )
-                    if len(attachments) > 0:
-                        attachments["text"] = attachments["attachments"].apply(
-                            lambda x: x["attachment_description"]
-                        )
-                        attachments = (
-                            attachments["text"].value_counts().reset_index()
-                        )
-                        attachments.columns = ["text", "update_count"]
-                        attachments["text_type"] = "attachment"
-                        shorts = shorts.merge(
-                            attachments, on=["text", "text_type"], how="outer"
-                        )
-                        shorts["count"] = shorts["count"].fillna(0) + shorts[
-                            "update_count"
-                        ].fillna(0)
-                        shorts = shorts.drop(columns=["update_count"])
-                    # Add a shuffle sort column for random ordering
-                    data["shuffle_sort"] = random.randint(0, 1000000)
-                    # Rename and filter columns before pushing to the database
-                    data = data.rename(
-                        columns={
-                            "id": "recap_id",
-                            "docket_entry_id": "id",
-                            "entry_date_filed": "date_filed",
-                        }
-                    )
-                    data = data[
-                        [
-                            "idrecap_id",
-                            "docket_id",
-                            "entry_number",
-                            "date_filed",
-                            "text",
-                            "shuffle_sort",
-                        ]
-                    ]
-                    data["date_filed"] = pd.to_datetime(data["date_filed"])
-                    data["entry_number"] = data["entry_number"].astype(
-                        pd.Int64Dtype()
-                    )
-                    data = data[data["text"].apply(len) > 0]
-                    # Push to the database
-                    if len(data) > 0:
-                        f = io.StringIO()
-                        data.to_csv(f, index=False)
-                        f.seek(0)
-                        DocketEntry.objects.from_csv(
-                            f,
-                            ignore_conflicts=True,
-                            static_mapping={
-                                "created_at": datetime.now(),
-                                "updated_at": datetime.now(),
-                            },
-                        )
+                attachments = attachments["text"].value_counts().reset_index()
+                attachments.columns = ["text", "update_count"]
+                attachments["text_type"] = "attachment"
+                shorts = shorts.merge(
+                    attachments, on=["text", "text_type"], how="outer"
+                )
+                shorts["count"] = shorts["count"].fillna(0) + shorts[
+                    "update_count"
+                ].fillna(0)
+                shorts = shorts.drop(columns=["update_count"])
+            # Add a shuffle sort column for random ordering
+            data["shuffle_sort"] = random.randint(0, 1000000)
+            # Rename and filter columns before pushing to the database
+            data = data.rename(
+                columns={
+                    "id": "recap_id",
+                    "docket_entry_id": "id",
+                    "entry_date_filed": "date_filed",
+                }
+            )
+            data = data[
+                [
+                    "id",
+                    "recap_id",
+                    "docket_id",
+                    "entry_number",
+                    "date_filed",
+                    "text",
+                    "shuffle_sort",
+                ]
+            ]
+            data["date_filed"] = pd.to_datetime(data["date_filed"])
+            data["entry_number"] = data["entry_number"].astype(pd.Int64Dtype())
+            data = data[data["text"].apply(len) > 0]
+            # Push to the database
+            if len(data) > 0:
+                f = io.StringIO()
+                data.to_csv(f, index=False)
+                f.seek(0)
+                DocketEntry.objects.from_csv(
+                    f,
+                    ignore_conflicts=True,
+                    static_mapping={
+                        "created_at": datetime.now(),
+                        "updated_at": datetime.now(),
+                        "features": "{}",
+                    },
+                )
     shorts["shuffle_sort"] = shorts["text"].apply(
         lambda _: random.randint(0, 1000000)
     )
@@ -403,39 +418,23 @@ def import_docket_sample(batch_size=100000):
 )
 def generate_docket_sample(do_import, skip_cached_steps):
     """Prepare a sample of dockets for use in the application."""
-    SAMPLE_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DOCKET_SAMPLE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    if not SAMPLE_INDEX_PATH.exists() or skip_cached_steps:
+    # Get the case index
+    if not SAMPLE_INDEX_PATH.exists():
         if not skip_cached_steps:
-            print("Downloading sample index...")
+            print("Downloading cached sample index...")
             download_file(SAMPLE_INDEX_URL, SAMPLE_INDEX_PATH)
         else:
-            if not REDUCED_DATA_PATH.exists():
-                if not COVERAGE_DATA_PATH.exists():
-                    # Download coverage data
-                    print("Downloading coverage data...")
-                    download_file(COVERAGE_DATA_URL, COVERAGE_DATA_PATH)
-                if not BULK_DATA_PATH.exists():
-                    if not BULK_DATA_ZIP_PATH.exists():
-                        # Download the bulk dockets data
-                        print(
-                            f"Downloading bulk dockets data to {BULK_DATA_ZIP_PATH}\nThis may take a while..."
-                        )
-                        download_file(BULK_DOCKETS_URL, BULK_DATA_ZIP_PATH)
+            create_docket_index_from_scratch()
 
-                    # Extract the bulk dockets data
-                    print(
-                        f"Extracting {BULK_DATA_ZIP_PATH} to {BULK_DATA_PATH}\nThis may take a while..."
-                    )
-                    extract_bz2_file(BULK_DATA_ZIP_PATH, BULK_DATA_PATH)
+    # Get the sample data
+    if not DOCKET_SAMPLE_PATH.exists() and not skip_cached_steps:
+        print("Downloading cached docket sample data...")
+        download_file(DOCKET_SAMPLE_URL, DOCKET_SAMPLE_PATH)
 
-                # Reduce the bulk dockets data
-                print("Reduce and preprocess bulk dockets data...")
-                reduce_bulk_data()
-
-            # Create the docket index
-            print("Creating docket index...")
-            create_docket_index()
+    # Check for gaps and download from CourtListener
+    print("Downloading docket sample from CourtListener...")
 
     # Temporary, later remove the blocker to download_docket_sample()
     if not do_import:
