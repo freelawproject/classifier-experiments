@@ -1,5 +1,13 @@
 # CLI Commands
 
+## `clx config`
+
+This allows you to configure whether the package should automatically load the `.env` file with `python-dotenv`.
+
+```bash
+clx config --autoload-env on
+```
+
 ## `clx manage`
 
 This command is a wrapper around Django's `manage.py` command. It ensures that Django is initialized before running the command.
@@ -14,7 +22,7 @@ clx manage runserver
 
 This command generates a sample of dockets for use in the docket viewer application. Running this command will execute the following steps:
 
-1. Download the raw bulk docket data from CourtListener's [bulk data archive](https://com-courtlistener-storage.s3-us-west-2.amazonaws.com/list.html?prefix=bulk-data/). The url for this is hardcoded to the bulk data exported on `2025-10-28`. To use an updated version, set the `BULK_DOCKETS_URL` environment variable.
+1. Download the raw bulk docket data from CourtListener's [bulk data archive](https://com-courtlistener-storage.s3-us-west-2.amazonaws.com/list.html?prefix=bulk-data/). The url for this is hardcoded to the bulk data exported on `2025-10-31`. To use an updated version, set the `BULK_DOCKETS_URL` environment variable.
 2. Generates `recap_dockets_reduced.csv`, a preprocessed version of the bulk data. This version:
     - Merges bulk data with document coverage data, showing the number of RECAP documents (i.e. docket entries / attachments) for each case, plus the number of pdfs available for each.
     - Filters to cases with at least one docket entry.

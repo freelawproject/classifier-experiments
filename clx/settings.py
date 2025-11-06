@@ -4,9 +4,10 @@ from pathlib import Path
 from django.core.management.utils import get_random_secret_key
 
 BASE_DIR = Path(__file__).resolve().parent
-LOCAL_DATA_DIR = Path(os.getenv("LOCAL_DATA_DIR", BASE_DIR.parent / "data"))
+CLX_HOME = Path(os.getenv("CLX_HOME", Path.home() / "clx"))
+DATA_DIR = Path(CLX_HOME / "data")
+CONFIG_PATH = Path.home() / ".cache" / "clx" / "config.json"
 
-# Django settings
 SECRET_KEY = os.getenv("SECRET_KEY", get_random_secret_key())
 DEBUG = os.getenv("DEBUG", "off") == "on"
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
