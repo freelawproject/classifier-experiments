@@ -33,7 +33,7 @@ or [pip](https://pip.pypa.io/en/stable/getting-started/):
 pip install -e .
 ```
 
-> It is recommended to run `clx config --autoload-env on` after installing the package. See below for more details.
+It is recommended to run `clx config --autoload-env on` after installing the package. See below for more details.
 
 ## Configuration
 
@@ -94,7 +94,7 @@ pre-commit run --all-files
 Run the tests with:
 
 ```bash
-uv run -m unittest
+TESTING=on uv run -m unittest
 ```
 
 ## License

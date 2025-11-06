@@ -14,6 +14,9 @@ jobs:
         python-version:
         - "3.13"
 
+    env:
+      TESTING: on
+
     steps:
       - uses: actions/checkout@v4
 
