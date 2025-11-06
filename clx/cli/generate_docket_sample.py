@@ -1,27 +1,37 @@
+import ast
+import io
 import os
+import random
 import time
 import urllib.parse
+from datetime import datetime
 
 import click
 import pandas as pd
 import requests
 from tqdm import tqdm
 
-from clx import download_file, extract_bz2_file, pd_save_or_append
-from clx.settings import LOCAL_DATA_DIR
+from clx import (
+    download_file,
+    extract_attachments,
+    extract_bz2_file,
+    pd_save_or_append,
+)
+from clx.settings import DATA_DIR
 
 BULK_DOCKETS_URL = os.getenv(
     "BULK_DOCKETS_URL",
-    "https://storage.courtlistener.com/bulk-data/dockets-2025-10-28.csv.bz2",
+    "https://storage.courtlistener.com/bulk-data/dockets-2025-10-31.csv.bz2",
 )
-BULK_DATA_ZIP_PATH = LOCAL_DATA_DIR / "docket_sample" / "recap_dockets.csv.bz2"
-BULK_DATA_PATH = LOCAL_DATA_DIR / "docket_sample" / "recap_dockets.csv"
-COVERAGE_DATA_PATH = LOCAL_DATA_DIR / "docket_sample" / "document_coverage.csv"
-REDUCED_DATA_PATH = (
-    LOCAL_DATA_DIR / "docket_sample" / "recap_dockets_reduced.csv"
-)
-SAMPLE_INDEX_PATH = LOCAL_DATA_DIR / "docket_sample" / "docket_index.csv"
-DOCKET_SAMPLE_DIR = LOCAL_DATA_DIR / "docket_sample" / "sample"
+BULK_DATA_ZIP_PATH = DATA_DIR / "docket_sample" / "recap_dockets.csv.bz2"
+BULK_DATA_PATH = DATA_DIR / "docket_sample" / "recap_dockets.csv"
+COVERAGE_DATA_URL = "https://media.githubusercontent.com/media/freelawproject/classifier-experiments/refs/heads/data/home/data/docket_sample/document_coverage.csv"
+COVERAGE_DATA_PATH = DATA_DIR / "docket_sample" / "document_coverage.csv"
+REDUCED_DATA_PATH = DATA_DIR / "docket_sample" / "recap_dockets_reduced.csv"
+SAMPLE_INDEX_URL = "https://media.githubusercontent.com/media/freelawproject/classifier-experiments/refs/heads/data/home/data/docket_sample/docket_index.csv"
+SAMPLE_INDEX_PATH = DATA_DIR / "docket_sample" / "docket_index.csv"
+DOCKET_SAMPLE_URL = ""
+DOCKET_SAMPLE_PATH = DATA_DIR / "docket_sample" / "docket_sample.csv"
 
 
 def get_crude_case_type(docket_number):
@@ -75,7 +85,7 @@ def reduce_bulk_data():
         progress.update(len(chunk))
 
 
-def get_sample(
+def get_sample_from_reduced_data(
     reduced_data, n, group_cols, min_entries=None, max_entries=None
 ):
     """Get a sample from the reduced data based on some grouping columns."""
@@ -89,8 +99,8 @@ def get_sample(
     return sample.reset_index(drop=True)
 
 
-def create_docket_index():
-    """Apply sampling strategies to generate the docket index."""
+def create_docket_index_from_reduced_data():
+    """Apply sampling strategies to reduced data to generate the docket index."""
     reduced_data = pd.read_csv(REDUCED_DATA_PATH)
     most_entries_available = reduced_data[
         reduced_data["num_main_available"] / reduced_data["num_main_documents"]
@@ -99,11 +109,11 @@ def create_docket_index():
     sample = pd.concat(
         [
             # Short cases sample, ~0.5M entries
-            get_sample(
+            get_sample_from_reduced_data(
                 reduced_data, 10, ["filing_year", "court_id"], max_entries=20
             ),
             # Medium cases sample, ~7M entries
-            get_sample(
+            get_sample_from_reduced_data(
                 reduced_data,
                 20,
                 ["filing_year", "court_id"],
@@ -111,7 +121,7 @@ def create_docket_index():
                 max_entries=500,
             ),
             # Long cases sample, filing year group only, ~1M entries
-            get_sample(
+            get_sample_from_reduced_data(
                 reduced_data,
                 20,
                 ["filing_year"],
@@ -119,7 +129,7 @@ def create_docket_index():
                 max_entries=5000,
             ),
             # Cases where at least 90% of the main documents are available, ~0.5M entries
-            get_sample(
+            get_sample_from_reduced_data(
                 most_entries_available,
                 100,
                 ["filing_year", "court_id"],
@@ -127,11 +137,13 @@ def create_docket_index():
                 max_entries=5000,
             ),
             # Crude Case Type sample, ~1M entries
-            get_sample(
+            get_sample_from_reduced_data(
                 reduced_data, 5000, ["crude_case_type"], max_entries=1000
             ),
             # Nature of Suit sample, ~1.5M entries
-            get_sample(reduced_data, 30, ["nature_of_suit"], max_entries=1000),
+            get_sample_from_reduced_data(
+                reduced_data, 30, ["nature_of_suit"], max_entries=1000
+            ),
         ]
     )
     sample = sample.drop_duplicates(subset=["id"])
@@ -140,6 +152,36 @@ def create_docket_index():
     print(f"Saved docket index to {SAMPLE_INDEX_PATH}")
     print(f"Number of unique dockets: {sample['id'].nunique()}")
     print(f"Number of docket entries: {sample['num_documents'].sum()}")
+
+
+def create_docket_index_from_scratch():
+    """The full flow to create the docket index from scratch."""
+    if not REDUCED_DATA_PATH.exists():
+        if not COVERAGE_DATA_PATH.exists():
+            # Download coverage data
+            print("Downloading coverage data...")
+            download_file(COVERAGE_DATA_URL, COVERAGE_DATA_PATH)
+        if not BULK_DATA_PATH.exists():
+            if not BULK_DATA_ZIP_PATH.exists():
+                # Download the bulk dockets data
+                print(
+                    f"Downloading bulk dockets data to {BULK_DATA_ZIP_PATH}\nThis may take a while..."
+                )
+                download_file(BULK_DOCKETS_URL, BULK_DATA_ZIP_PATH)
+
+            # Extract the bulk dockets data
+            print(
+                f"Extracting {BULK_DATA_ZIP_PATH} to {BULK_DATA_PATH}\nThis may take a while..."
+            )
+            extract_bz2_file(BULK_DATA_ZIP_PATH, BULK_DATA_PATH)
+
+        # Reduce the bulk dockets data
+        print("Reduce and preprocess bulk dockets data...")
+        reduce_bulk_data()
+
+    # Create the docket index
+    print("Creating docket index...")
+    create_docket_index_from_reduced_data()
 
 
 def get_with_retry(url, headers, max_retries=3, sleep=10, rate_limit_sleep=90):
@@ -162,7 +204,7 @@ def get_with_retry(url, headers, max_retries=3, sleep=10, rate_limit_sleep=90):
     raise Exception(f"Too many retries for {url}")
 
 
-def collect_docket_data(docket_id, progress):
+def download_single_docket_data(docket_id, progress):
     """Download a docket from CourtListener."""
     time.sleep(0.3)
     cl_token = os.getenv("CL_TOKEN")
@@ -211,13 +253,7 @@ def collect_docket_data(docket_id, progress):
     return data
 
 
-def get_sample_year_path(year):
-    return DOCKET_SAMPLE_DIR / f"{year}.csv"
-
-
 def download_docket_sample():
-    DOCKET_SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
-
     docket_index = pd.read_csv(SAMPLE_INDEX_PATH)
     docket_index = docket_index.sort_values(
         by="num_documents", ascending=False
@@ -225,15 +261,12 @@ def download_docket_sample():
 
     total_entries = docket_index["num_documents"].sum()
 
-    years = docket_index["filing_year"].unique()
-    for year in years:
-        year_path = get_sample_year_path(year)
-        if year_path.exists():
-            existing_ids = pd.read_csv(year_path, usecols=["docket_id"])
-            existing_ids = existing_ids.drop_duplicates()
-            docket_index = docket_index[
-                ~docket_index["id"].isin(existing_ids["docket_id"])
-            ]
+    if DOCKET_SAMPLE_PATH.exists():
+        existing_ids = pd.read_csv(DOCKET_SAMPLE_PATH, usecols=["docket_id"])
+        existing_ids = existing_ids.drop_duplicates()
+        docket_index = docket_index[
+            ~docket_index["id"].isin(existing_ids["docket_id"])
+        ]
 
     if len(docket_index) > 0:
         remaining_entries = docket_index["num_documents"].sum()
@@ -244,37 +277,167 @@ def download_docket_sample():
             unit=" entries",
         )
         for row in docket_index.to_dict("records"):
-            docket_data = collect_docket_data(row["id"], progress)
-            year_path = get_sample_year_path(row["filing_year"])
-            pd_save_or_append(docket_data, year_path)
+            docket_data = download_single_docket_data(row["id"], progress)
+            pd_save_or_append(docket_data, DOCKET_SAMPLE_PATH)
         progress.close()
+    print(f"All docket sample data downloaded to {DOCKET_SAMPLE_PATH}")
+
+
+def parse_attachments(text):
+    """Parse the attachments from a docket entry."""
+    attachment_sections = extract_attachments(text)
+    attachment_sections = sorted(
+        attachment_sections, key=lambda x: -x["start"]
+    )
+    attachments = []
+    for attachment_section in attachment_sections:
+        text = (
+            text[: attachment_section["start"]]
+            + " "
+            + text[attachment_section["end"] :]
+        )
+        text = " ".join(text.split()).strip()
+        attachments.extend(attachment_section["attachments"])
+    return text, attachments
+
+
+def import_docket_sample(batch_size=100000):
+    from clx.models import DocketEntry
+
+    total_entries = pd.read_csv(SAMPLE_INDEX_PATH)["num_documents"].sum()
+
+    shorts = pd.DataFrame(columns=["text", "text_type", "count"])
+    progress = tqdm(
+        desc="Importing docket sample", total=total_entries, unit=" entries"
+    )
+    for data in pd.read_csv(DOCKET_SAMPLE_PATH, chunksize=batch_size):
+        progress.update(len(data))
+        data["timestamp"] = pd.to_datetime(
+            data["meta"].apply(lambda x: ast.literal_eval(x)["timestamp"]),
+            format="mixed",
+        )
+        # Filter to only PACER documents, we will extract attachments with regex
+        data = data[data["document_type"] == "PACER Document"]
+        # Get the short descriptions before dropping where description is null
+        short_data = data[["short_description"]].dropna()
+        if len(short_data) > 0:
+            short_data = short_data.rename(
+                columns={"short_description": "text"}
+            )
+            short_data = short_data["text"].value_counts().reset_index()
+            short_data.columns = ["text", "update_count"]
+            short_data["text_type"] = "short_description"
+            shorts = shorts.merge(
+                short_data, on=["text", "text_type"], how="outer"
+            )
+            shorts["count"] = shorts["count"].fillna(0) + shorts[
+                "update_count"
+            ].fillna(0)
+            shorts = shorts.drop(columns=["update_count"])
+        data = data.dropna(subset="description")
+        if len(data) > 0:
+            # Rare, but sometimes there are duplicates for main documents, keep the most recent
+            data = data.sort_values(by="timestamp", ascending=False)
+            data = data.drop_duplicates(
+                subset=["docket_entry_id"], keep="first"
+            )
+            # Simplify main document text and extract attachment text
+            data["text"], data["attachments"] = zip(
+                *data["description"].apply(parse_attachments)
+            )
+            # Add attachments to shorts
+            attachments = data[["attachments"]].explode("attachments").dropna()
+            if len(attachments) > 0:
+                attachments["text"] = attachments["attachments"].apply(
+                    lambda x: x["attachment_description"]
+                )
+                attachments = attachments["text"].value_counts().reset_index()
+                attachments.columns = ["text", "update_count"]
+                attachments["text_type"] = "attachment"
+                shorts = shorts.merge(
+                    attachments, on=["text", "text_type"], how="outer"
+                )
+                shorts["count"] = shorts["count"].fillna(0) + shorts[
+                    "update_count"
+                ].fillna(0)
+                shorts = shorts.drop(columns=["update_count"])
+            # Add a shuffle sort column for random ordering
+            data["shuffle_sort"] = random.randint(0, 1000000)
+            # Rename and filter columns before pushing to the database
+            data = data.rename(
+                columns={
+                    "id": "recap_id",
+                    "docket_entry_id": "id",
+                    "entry_date_filed": "date_filed",
+                }
+            )
+            data = data[
+                [
+                    "id",
+                    "recap_id",
+                    "docket_id",
+                    "entry_number",
+                    "date_filed",
+                    "text",
+                    "shuffle_sort",
+                ]
+            ]
+            data["date_filed"] = pd.to_datetime(data["date_filed"])
+            data["entry_number"] = data["entry_number"].astype(pd.Int64Dtype())
+            data = data[data["text"].apply(len) > 0]
+            # Push to the database
+            if len(data) > 0:
+                f = io.StringIO()
+                data.to_csv(f, index=False)
+                f.seek(0)
+                DocketEntry.objects.from_csv(
+                    f,
+                    ignore_conflicts=True,
+                    static_mapping={
+                        "created_at": datetime.now(),
+                        "updated_at": datetime.now(),
+                        "features": "{}",
+                    },
+                )
+    shorts["shuffle_sort"] = shorts["text"].apply(
+        lambda _: random.randint(0, 1000000)
+    )
+    # Push to the database and update counts
+    print(shorts)
+    print(shorts["text_type"].value_counts())
 
 
 @click.command()
-def generate_docket_sample():
+@click.option(
+    "do_import", "--import", is_flag=True, help="Import the docket sample"
+)
+@click.option(
+    "--skip-cached-steps",
+    is_flag=True,
+    help="Instead of downloading the cached data, this will re-run the data generation pipeline from scratch.",
+)
+def generate_docket_sample(do_import, skip_cached_steps):
     """Prepare a sample of dockets for use in the application."""
+    DOCKET_SAMPLE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # Get the case index
     if not SAMPLE_INDEX_PATH.exists():
-        if not REDUCED_DATA_PATH.exists():
-            if not BULK_DATA_PATH.exists():
-                if not BULK_DATA_ZIP_PATH.exists():
-                    # Download the bulk dockets data
-                    print(
-                        f"Downloading bulk dockets data to {BULK_DATA_ZIP_PATH}\nThis may take a while..."
-                    )
-                    download_file(BULK_DOCKETS_URL, BULK_DATA_ZIP_PATH)
+        if not skip_cached_steps:
+            print("Downloading cached sample index...")
+            download_file(SAMPLE_INDEX_URL, SAMPLE_INDEX_PATH)
+        else:
+            create_docket_index_from_scratch()
 
-                # Extract the bulk dockets data
-                print(
-                    f"Extracting {BULK_DATA_ZIP_PATH} to {BULK_DATA_PATH}\nThis may take a while..."
-                )
-                extract_bz2_file(BULK_DATA_ZIP_PATH, BULK_DATA_PATH)
+    # Get the sample data
+    if not DOCKET_SAMPLE_PATH.exists() and not skip_cached_steps:
+        print("Downloading cached docket sample data...")
+        download_file(DOCKET_SAMPLE_URL, DOCKET_SAMPLE_PATH)
 
-            # Reduce the bulk dockets data
-            print("Reduce and preprocess bulk dockets data...")
-            reduce_bulk_data()
+    # Check for gaps and download from CourtListener
+    print("Downloading docket sample from CourtListener...")
 
-        # Create the docket index
-        print("Creating docket index...")
-        create_docket_index()
-
-    download_docket_sample()
+    # Temporary, later remove the blocker to download_docket_sample()
+    if not do_import:
+        download_docket_sample()
+    else:
+        import_docket_sample()

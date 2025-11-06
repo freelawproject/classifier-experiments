@@ -11,7 +11,7 @@ See the [quickstart](#quickstart) below. For more detail, check out the document
 * [Training and Inference Pipelines](clx/ml)
 * [LLM Tools](clx/llm)
 
-Some CLI commands generate or cache data in your `CLX_HOME` directory. This defaults to `~/clx` and can be configured with the `CLX_HOME` environment variable.
+Some CLI commands generate or pull cached data into your clx home directory. This defaults to `~/clx` and can be configured with the `CLX_HOME` environment variable. See the [Data Branch](https://github.com/freelawproject/classifier-experiments/tree/data) for more details.
 
 ## Installation
 
@@ -22,19 +22,16 @@ git clone https://github.com/freelawproject/classifier-experiments
 cd classifier-experiments
 ```
 
-Then you can install with [uv](https://docs.astral.sh/uv/getting-started/installation/) or [pip](https://pip.pypa.io/en/stable/getting-started/):
+Then you can install with [uv](https://docs.astral.sh/uv/getting-started/installation/):
 
-* Using `uv`:
-    ```bash
-    uv sync
-    ```
-    Use `uv sync --extra dev` to install development dependencies.
+```bash
+uv sync
+```
+or [pip](https://pip.pypa.io/en/stable/getting-started/):
 
-* Using `pip`:
-   ```bash
-   pip install -e .
-   ```
-   Use `pip install -e '.[dev]'` to install development dependencies.
+```bash
+pip install -e .
+```
 
 > It is recommended to run `clx config --autoload-env on` after installing the package. See below for more details.
 
@@ -52,6 +49,8 @@ This will update your package config to automatically load your `.env` file with
 
 ## Quickstart
 
+TODO
+
 ```python
 # Using models outside of Django
 from clx.models import DocketEntry
@@ -61,7 +60,24 @@ print(DocketEntry.objects.all().count())
 
 ## Development
 
-Be sure to run `pre-commit` before committing your changes.
+Here are a few tips for setting up your development environment.
+
+### Dev Installation
+
+Install with the `dev` extra to include development dependencies:
+
+```bash
+uv sync --extra dev
+```
+or
+
+```bash
+pip install -e '.[dev]'
+```
+
+### Pre-commit Hooks
+
+Run the following to install the `pre-commit` hooks:
 
 ```bash
 pre-commit install
@@ -72,6 +88,8 @@ Or you can run `pre-commit` manually before committing your changes:
 ```bash
 pre-commit run --all-files
 ```
+
+### Testing
 
 Run the tests with:
 
