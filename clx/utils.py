@@ -4,11 +4,13 @@ from pathlib import Path
 
 import django
 import pandas as pd
+import regex as re
 import requests
 from tqdm import tqdm
 
 
 def init_django():
+    """Initializes Django."""
     os.environ["DJANGO_SETTINGS_MODULE"] = "clx.settings"
     django.setup()
 
@@ -58,3 +60,27 @@ def extract_bz2_file(
         for data in iter(lambda: zip_file.read(1024 * 1024), b""):
             file.write(data)
             progress.update(len(data))
+
+
+def extract_from_pattern(
+    text, pattern, label, ignore_case=False, extract_groups=None
+):
+    """Extract spans from text using a regex pattern."""
+    spans = []
+    for match in re.finditer(
+        pattern, text, re.IGNORECASE if ignore_case else 0
+    ):
+        spans.append(
+            {
+                "start": match.start(),
+                "end": match.end(),
+                "label": label,
+            }
+        )
+        if extract_groups:
+            for k, v in extract_groups.items():
+                spans[-1][k] = {
+                    "start": match.start(v),
+                    "end": match.end(v),
+                }
+    return spans
