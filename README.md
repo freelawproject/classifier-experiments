@@ -94,7 +94,13 @@ pre-commit run --all-files
 Run the tests with:
 
 ```bash
-TESTING=on uv run -m unittest
+tox run
+```
+
+Or to run a specific test, give the module path as an argument:
+
+```bash
+tox run -- tests.test_env.EnvTest.test_env
 ```
 
 ## License
