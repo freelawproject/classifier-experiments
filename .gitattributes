@@ -1,0 +1,2 @@
+data/docket_sample/docket_index.csv filter=lfs diff=lfs merge=lfs -text
+data/docket_sample/document_coverage.csv filter=lfs diff=lfs merge=lfs -text
