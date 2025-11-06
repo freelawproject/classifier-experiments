@@ -3,8 +3,13 @@ from pathlib import Path
 
 from django.core.management.utils import get_random_secret_key
 
+TESTING = os.getenv("TESTING", "off") == "on"
+
 BASE_DIR = Path(__file__).resolve().parent
-CLX_HOME = Path(os.getenv("CLX_HOME", Path.home() / "clx"))
+if TESTING:
+    CLX_HOME = BASE_DIR.parent / "tests" / "fixtures" / "home"
+else:
+    CLX_HOME = Path(os.getenv("CLX_HOME", Path.home() / "clx"))
 DATA_DIR = Path(CLX_HOME / "data")
 CONFIG_PATH = Path.home() / ".cache" / "clx" / "config.json"
 
