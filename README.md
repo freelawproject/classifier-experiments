@@ -10,7 +10,8 @@ See the [quickstart](#quickstart) below. For more detail, check out the document
 * [Docket Viewer Application](clx/app)
 * [Training and Inference Pipelines](clx/ml)
 * [LLM Tools](clx/llm)
-* [Local Data Overview](clx/data)
+
+Some CLI commands generate or cache data in your `CLX_HOME` directory. This defaults to `~/clx` and can be configured with the `CLX_HOME` environment variable.
 
 ## Installation
 
@@ -35,9 +36,19 @@ Then you can install with [uv](https://docs.astral.sh/uv/getting-started/install
    ```
    Use `pip install -e '.[dev]'` to install development dependencies.
 
+> It is recommended to run `clx config --autoload-env on` after installing the package. See below for more details.
+
 ## Configuration
 
 The package can be configured through environment variables or a `.env` file. See [`.env.example`](.env.example) for a complete list of configuration options.
+
+The easiest way to make sure your environment variables are always loaded is to run the following once:
+
+```bash
+clx config --autoload-env on
+```
+
+This will update your package config to automatically load your `.env` file with `python-dotenv`.
 
 ## Quickstart
 

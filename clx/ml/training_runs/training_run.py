@@ -20,9 +20,9 @@ from transformers import (
 )
 from transformers.pipelines.pt_utils import KeyDataset
 
-from clx.settings import LOCAL_DATA_DIR
+from clx.settings import CLX_HOME
 
-DEFAULT_RUN_DIR = LOCAL_DATA_DIR / "runs"
+DEFAULT_RUN_DIR = CLX_HOME / "runs"
 
 
 class TrainingRun:

@@ -11,7 +11,7 @@ run = training_run("classification", "my-run-name")
 run.train(train_data, eval_data, overwrite=True)
 ```
 
-By default, the training run will save data in `LOCAL_DATA_DIR / "runs" / "my-run-name"`. This can be customized by passing a `run_dir_parent` argument. You can load a training run instance from a run directory as follows:
+By default, the training run will save data in `CLX_HOME / "runs" / "my-run-name"`. This can be customized by passing a `run_dir_parent` argument. You can load a training run instance from a run directory as follows:
 
 ```python
 from clx.ml import training_run
@@ -31,7 +31,7 @@ preds = run.predict(texts)
 Here are some arguments you can pass to customize your training run:
 
 - `run_name`: The name of the training run.
-- `run_dir_parent`: The parent directory of the training run.
+- `run_dir_parent`: The parent directory of the training run (defaults to `CLX_HOME / "runs"`).
 - `base_model_name`: The Hugging Face model name of the base model to finetune.
 - `tokenizer_name`: The name of the tokenizer to use (defaults to the base model name).
 - `tokenize_args`: Passed to the tokenize function when preparing your dataset.
@@ -75,7 +75,7 @@ run.train(data)
 Predict outputs a dictionary mapping label names to scores for each example.
 
 ```python
-run = training_run(load=LOCAL_DATA_DIR / "runs" / "my-run-name")
+run = training_run(load=CLX_HOME / "runs" / "my-run-name")
 preds = run.predict(data["text"].tolist(), batch_size=8)
 print(preds)
 
@@ -116,7 +116,7 @@ run.train(data)
 Predict outputs a dictionary mapping label names to scores for each example.
 
 ```python
-run = training_run(load=LOCAL_DATA_DIR / "runs" / "my-run-name")
+run = training_run(load=CLX_HOME / "runs" / "my-run-name")
 preds = run.predict(data["text"].tolist(), batch_size=8)
 print(preds)
 
@@ -141,10 +141,12 @@ class MyTrainingRun(TrainingRun):
     # Required: The name of the training run.
     name = ...
 
-    # Required: The columns to select from the Dataset object when converting to Tensors. These should match the inputs expected by your `AutoModel` class.
+    # Required: The columns to select from the Dataset object when converting
+    # to Tensors. These should match the inputs expected by your `AutoModel` class.
     dataset_cols = ["input_ids", "attention_mask", ...]
 
-    # Optional: If you add any additional arguments to __init__, add them here so they are dumped to the run config (must be serializable).
+    # Optional: If you add any additional arguments to __init__, add them here so
+    # they are dumped to the run config (must be JSON-serializable).
     add_config_attrs = ["my-config-attr"]
 
     # Provide pipeline initialization arguments to the HF pipeline constructor for inference.
@@ -157,13 +159,16 @@ class MyTrainingRun(TrainingRun):
     trainer_class = ...
 
     def validate_data_format(self, data: pd.DataFrame) -> None:
-        # You must implement this to define your task-specific data format. Raise errors if the user's data is not in the expected format.
+        # You must implement this to define your task-specific data format. Raise errors
+        # if the user's data is not in the expected format.
 
     def load_model(self, model_name: str | None = None) -> PreTrainedModel:
-        # Return an instance of the appropriate `AutoModel` class for your task. You should pass `self.model_args` to the `from_pretrained` method to allow user overrides.
+        # Return an instance of the appropriate `AutoModel` class for your task. You should
+        # pass `self.model_args` to the `from_pretrained` method to allow user overrides.
 
     def tokenize(self, examples: dict) -> dict:
-        # Here is the base implementation for the tokenize function that is mapped over your dataset. Override this if you need to prepare any task-specific inputs.
+        # Here is the base implementation for the tokenize function that is mapped over your
+        # dataset. Override this if you need to prepare any task-specific inputs.
         return self.tokenizer(
             examples["text"],
             padding=False,
