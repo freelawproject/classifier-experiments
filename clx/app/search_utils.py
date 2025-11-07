@@ -1,3 +1,4 @@
+import csv
 import random
 from io import StringIO
 
@@ -226,8 +227,49 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         return added, removed
 
     @classmethod
-    def bulk_insert(cls, data):
+    def bulk_update_column(cls, column, ids, values, id_column="id"):
+        """Bulk update column values by ID."""
+        assert len(ids) == len(values), "ids and values must match in length"
+
+        field = cls._meta.get_field(column)
+        field_type = get_pg_type(field)
+        id_type = get_pg_type(cls._meta.get_field(id_column))
+
+        table = cls._meta.db_table
+
+        buf = StringIO()
+        writer = csv.writer(buf)
+        for k, v in zip(ids, values):
+            writer.writerow([k, "" if v is None else v])
+        buf.seek(0)
+        with transaction.atomic(), connection.cursor() as cur:
+            cur.execute(
+                f"CREATE TEMP TABLE stage_updates(id {id_type}, val text) ON COMMIT DROP;"
+            )
+            cur.copy_expert(
+                "COPY stage_updates (id, val) FROM STDIN WITH (FORMAT CSV)",
+                buf,
+            )
+            cur.execute(
+                f"""
+                UPDATE {table} t
+                SET {column} =
+                    CASE WHEN s.val = '' THEN NULL ELSE s.val::{field_type} END
+                FROM stage_updates s
+                WHERE t.{id_column} = s.id
+                """
+            )
+            updated = cur.rowcount
+            return updated
+
+    @classmethod
+    def bulk_insert(cls, data, **kwargs):
         """Bulk insert data into the model."""
+        if "id" not in data.columns:
+            start_id = 1
+            if cls.objects.exists():
+                start_id = cls.objects.order_by("-id").first().id + 1
+            data["id"] = range(start_id, start_id + len(data))
         data["text_hash"] = data["text"].apply(generate_hash)
         data["shuffle_sort"] = data["text_hash"].apply(
             lambda x: random.randint(0, 100000000)
@@ -237,15 +279,27 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         f.seek(0)
         cls.objects.from_csv(
             f,
-            ignore_conflicts=True,
             static_mapping={
                 "created_at": timezone.now(),
                 "updated_at": timezone.now(),
                 "features": "{}",
             },
+            **kwargs,
         )
 
     class Meta:
         abstract = True
         ordering = ["shuffle_sort"]
         indexes = []
+
+
+# Utils
+def get_pg_type(field):
+    """Get the PostgreSQL type for a field."""
+    if isinstance(field, (models.IntegerField | models.BigIntegerField)):
+        pg_type = "bigint"
+    elif isinstance(field, (models.TextField | models.CharField)):
+        pg_type = "text"
+    else:
+        raise NotImplementedError(f"Unsupported field type: {type(field)}")
+    return pg_type
