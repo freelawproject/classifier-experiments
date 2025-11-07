@@ -1,5 +1,5 @@
 from django.db.models import Q
-from postgres_copy import CopyQuerySet
+from postgres_copy import CopyManager, CopyQuerySet
 from pydantic import BaseModel as PydanticModel
 
 
@@ -92,3 +92,20 @@ class SearchQuerySet(CopyQuerySet):
         elif page_size > 1000:
             raise ValueError("Page size must be less than 1000")
         return self[page_size * (page - 1) : page_size * page]
+
+    def _chain(self):
+        clone = super()._chain()
+        clone.table_name = self.table_name
+        return clone
+
+
+# Queryset Managers
+class SearchManager(CopyManager.from_queryset(SearchQuerySet)):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.table_name = None
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        queryset.table_name = self.table_name
+        return queryset
