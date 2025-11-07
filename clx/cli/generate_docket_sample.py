@@ -1,10 +1,7 @@
 import ast
-import io
 import os
-import random
 import time
 import urllib.parse
-from datetime import datetime
 
 import click
 import pandas as pd
@@ -301,8 +298,8 @@ def parse_attachments(text):
     return text, attachments
 
 
-def import_docket_sample(batch_size=100000):
-    from clx.models import DocketEntry
+def import_docket_sample(batch_size=1000000):
+    from clx.models import DocketEntry, DocketEntryShort
 
     total_entries = pd.read_csv(SAMPLE_INDEX_PATH)["num_documents"].sum()
 
@@ -310,7 +307,9 @@ def import_docket_sample(batch_size=100000):
     progress = tqdm(
         desc="Importing docket sample", total=total_entries, unit=" entries"
     )
-    for data in pd.read_csv(DOCKET_SAMPLE_PATH, chunksize=batch_size):
+    for data in pd.read_csv(
+        DOCKET_SAMPLE_PATH, chunksize=batch_size, low_memory=False
+    ):
         progress.update(len(data))
         data["timestamp"] = pd.to_datetime(
             data["meta"].apply(lambda x: ast.literal_eval(x)["timestamp"]),
@@ -361,8 +360,6 @@ def import_docket_sample(batch_size=100000):
                     "update_count"
                 ].fillna(0)
                 shorts = shorts.drop(columns=["update_count"])
-            # Add a shuffle sort column for random ordering
-            data["shuffle_sort"] = random.randint(0, 1000000)
             # Rename and filter columns before pushing to the database
             data = data.rename(
                 columns={
@@ -379,7 +376,6 @@ def import_docket_sample(batch_size=100000):
                     "entry_number",
                     "date_filed",
                     "text",
-                    "shuffle_sort",
                 ]
             ]
             data["date_filed"] = pd.to_datetime(data["date_filed"])
@@ -387,24 +383,16 @@ def import_docket_sample(batch_size=100000):
             data = data[data["text"].apply(len) > 0]
             # Push to the database
             if len(data) > 0:
-                f = io.StringIO()
-                data.to_csv(f, index=False)
-                f.seek(0)
-                DocketEntry.objects.from_csv(
-                    f,
-                    ignore_conflicts=True,
-                    static_mapping={
-                        "created_at": datetime.now(),
-                        "updated_at": datetime.now(),
-                        "features": "{}",
-                    },
-                )
-    shorts["shuffle_sort"] = shorts["text"].apply(
-        lambda _: random.randint(0, 1000000)
+                DocketEntry.bulk_insert(data, ignore_conflicts=True)
+    # Push shorts to the database and update counts
+    shorts["count"] = shorts["count"].fillna(0).astype(int)
+    DocketEntryShort.bulk_insert(shorts, ignore_conflicts=True)
+    DocketEntryShort.bulk_update_column(
+        "count",
+        shorts["text"].tolist(),
+        shorts["count"].tolist(),
+        id_column="text",
     )
-    # Push to the database and update counts
-    print(shorts)
-    print(shorts["text_type"].value_counts())
 
 
 @click.command()
