@@ -1,6 +1,11 @@
+from django.contrib.postgres.fields import ArrayField
+from django.contrib.postgres.indexes import GinIndex
+from django.db import models
 from django.db.models import Q
 from postgres_copy import CopyManager, CopyQuerySet
 from pydantic import BaseModel as PydanticModel
+
+from clx.utils import generate_hash
 
 
 # Pydantic Models
@@ -109,3 +114,69 @@ class SearchManager(CopyManager.from_queryset(SearchQuerySet)):
         queryset = super().get_queryset()
         queryset.table_name = self.table_name
         return queryset
+
+
+# Abstract Models
+class BaseModel(models.Model):
+    """Base model for all models"""
+
+    id = models.BigAutoField(primary_key=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+
+class SearchDocumentModelBase(models.base.ModelBase):
+    """Meta class for search document models."""
+
+    def __new__(cls, name, bases, attrs, **kwargs):
+        """Create a new search document model."""
+        new_cls = super().__new__(cls, name, bases, attrs, **kwargs)
+        if not new_cls._meta.abstract:
+            new_cls.objects.table_name = new_cls._meta.db_table
+            new_cls._meta.indexes = [
+                GinIndex(
+                    fields=["features"],
+                    name=f"{new_cls._meta.db_table}_fs_gin",
+                )
+            ]
+        return new_cls
+
+
+class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
+    """Search document model."""
+
+    id = models.BigIntegerField(primary_key=True)
+    text = models.TextField()
+    text_hash = models.CharField(max_length=255)
+    features = ArrayField(models.BigIntegerField(), default=list, blank=True)
+    shuffle_sort = models.IntegerField()
+
+    objects = SearchManager()
+
+    def save(self, *args, **kwargs):
+        self.text_hash = generate_hash(self.text)
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_project(cls):
+        """Get the project for the search document."""
+        if not cls._meta.abstract:
+            from clx.models import Project
+
+            project, _ = Project.objects.get_or_create(
+                name=cls.__name__, table_name=cls._meta.db_table
+            )
+            return project
+
+    @property
+    def project(self):
+        """Get the project for the search document."""
+        return self.get_project()
+
+    class Meta:
+        abstract = True
+        ordering = ["shuffle_sort"]
+        indexes = []
