@@ -1,7 +1,11 @@
+import random
+from io import StringIO
+
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
-from django.db import models
+from django.db import connection, models, transaction
 from django.db.models import Q
+from django.utils import timezone
 from postgres_copy import CopyManager, CopyQuerySet
 from pydantic import BaseModel as PydanticModel
 
@@ -175,6 +179,71 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
     def project(self):
         """Get the project for the search document."""
         return self.get_project()
+
+    @classmethod
+    def bulk_replace_feature(cls, feature, ids):
+        """Bulk replace a feature for a table."""
+        entry_table = cls._meta.db_table
+        added = removed = 0
+
+        with transaction.atomic(), connection.cursor() as cur:
+            cur.execute(
+                "CREATE TEMP TABLE stage_feature_ids(entry_id BIGINT) ON COMMIT DROP;"
+            )
+            cur.execute("CREATE INDEX ON stage_feature_ids(entry_id);")
+
+            buf = StringIO("".join(f"{i}\n" for i in ids))
+            cur.copy_expert(
+                "COPY stage_feature_ids (entry_id) FROM STDIN WITH (FORMAT CSV)",
+                buf,
+            )
+
+            cur.execute(
+                f"""
+                UPDATE {entry_table} e
+                SET features = array_cat(e.features, ARRAY[%s]::bigint[])
+                FROM stage_feature_ids s
+                WHERE e.id = s.entry_id
+                    AND NOT (ARRAY[%s]::bigint[] <@ e.features)
+                """,
+                [feature, feature],
+            )
+            added = cur.rowcount
+
+            cur.execute(
+                f"""
+                UPDATE {entry_table} e
+                SET features = array_remove(e.features, %s)
+                WHERE (ARRAY[%s]::bigint[] <@ e.features)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM stage_feature_ids s WHERE s.entry_id = e.id
+                    )
+                """,
+                [feature, feature],
+            )
+            removed = cur.rowcount
+
+        return added, removed
+
+    @classmethod
+    def bulk_insert(cls, data):
+        """Bulk insert data into the model."""
+        data["text_hash"] = data["text"].apply(generate_hash)
+        data["shuffle_sort"] = data["text_hash"].apply(
+            lambda x: random.randint(0, 100000000)
+        )
+        f = StringIO()
+        data.to_csv(f, index=False)
+        f.seek(0)
+        cls.objects.from_csv(
+            f,
+            ignore_conflicts=True,
+            static_mapping={
+                "created_at": timezone.now(),
+                "updated_at": timezone.now(),
+                "features": "{}",
+            },
+        )
 
     class Meta:
         abstract = True
