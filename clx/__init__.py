@@ -15,6 +15,7 @@ from .utils import (
     extract_attachments,
     extract_bz2_file,
     extract_from_pattern,
+    generate_hash,
     init_django,
     pd_save_or_append,
 )
@@ -26,5 +27,6 @@ __all__ = [
     "pd_save_or_append",
     "extract_from_pattern",
     "extract_attachments",
+    "generate_hash",
     "autoload_env",
 ]

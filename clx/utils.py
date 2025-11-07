@@ -1,4 +1,6 @@
 import bz2
+import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -13,6 +15,13 @@ def init_django():
     """Initializes Django."""
     os.environ["DJANGO_SETTINGS_MODULE"] = "clx.settings"
     django.setup()
+
+
+def generate_hash(data):
+    """Generate a hash of the data."""
+    return hashlib.sha256(
+        json.dumps({"data": data}, sort_keys=True).encode()
+    ).hexdigest()
 
 
 def pd_save_or_append(data: pd.DataFrame, path: str | Path):
