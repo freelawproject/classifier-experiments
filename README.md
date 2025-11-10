@@ -62,7 +62,11 @@ print(DocketEntry.objects.all().count())
 
 Here are a few tips for setting up your development environment.
 
-### Dev Installation
+### Configure Data Directory
+
+You can set `CLX_HOME=home` in your environment if you want to use the `home` directory in this repo. Otherwise, it will default to `~/clx`.
+
+### Dependencies
 
 Install with the `dev` extra to include development dependencies:
 
