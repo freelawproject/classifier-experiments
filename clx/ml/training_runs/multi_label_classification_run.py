@@ -13,12 +13,12 @@ class MultiLabelClassificationRun(ClassificationRun):
 
     def tokenize(self, examples: dict) -> dict:
         """The tokenize function."""
-        inputs = self.tokenizer(
-            examples["text"],
-            padding=False,
-            truncation=True,
+        tokenize_args = {
+            "padding": False,
+            "truncation": True,
             **self.tokenize_args,
-        )
+        }
+        inputs = self.tokenizer(examples["text"], **tokenize_args)
         inputs["labels"] = torch.tensor(
             [
                 [int(label in example_labels) for label in self.label_names]

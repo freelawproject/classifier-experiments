@@ -167,14 +167,8 @@ class MyTrainingRun(TrainingRun):
         # pass `self.model_args` to the `from_pretrained` method to allow user overrides.
 
     def tokenize(self, examples: dict) -> dict:
-        # Here is the base implementation for the tokenize function that is mapped over your
+        # Check out the base implementation for the tokenize function that is mapped over your
         # dataset. Override this if you need to prepare any task-specific inputs.
-        return self.tokenizer(
-            examples["text"],
-            padding=False,
-            truncation=True,
-            **self.tokenize_args,
-        )
 
     def compute_metrics(self, eval_pred: tuple[torch.Tensor, torch.Tensor]) -> dict:
         # Implement this for your `compute_metrics` method used by the Trainer.

@@ -125,7 +125,8 @@ class TrainingRun:
 
     def load_pipe(self, **pipeline_args: dict) -> Pipeline:
         """Load the pipeline."""
-        return pipeline(**self.pipeline_args, **pipeline_args)
+        pipeline_args = {**self.pipeline_args, **pipeline_args}
+        return pipeline(**pipeline_args)
 
     @property
     def tokenizer(self) -> AutoTokenizer:
@@ -201,14 +202,14 @@ class TrainingRun:
         )
 
         # Prepare the training arguments
-        training_args = TrainingArguments(
-            output_dir=self.checkpoint_dir,
-            logging_dir=self.logging_dir,
-            logging_strategy="steps",
-            logging_steps=2,
+        training_args = {
+            "output_dir": self.checkpoint_dir,
+            "logging_dir": self.logging_dir,
+            "logging_strategy": "steps",
+            "logging_steps": 2,
             **self.training_args,
-        )
-
+        }
+        training_args = TrainingArguments(**training_args)
         # Prepare the trainer
         trainer_args = {
             "model": self.base_model,
@@ -257,9 +258,12 @@ class TrainingRun:
         """Run predictions batch predictions."""
         preds = []
         dataset = KeyDataset(Dataset.from_dict({"text": texts}), "text")
-        for out in self.pipe(
-            dataset, batch_size=batch_size, **self.predict_args, **predict_args
-        ):
+        predict_args = {
+            "batch_size": batch_size,
+            **self.predict_args,
+            **predict_args,
+        }
+        for out in self.pipe(dataset, **predict_args):
             preds.append(self.post_process_prediction(out))
         return preds
 
