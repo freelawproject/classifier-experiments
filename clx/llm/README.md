@@ -19,6 +19,74 @@ OPENAI_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 
+## DSPy Predictor
+
+DSPy predictors can be used to learn better prompts for predicting structured outputs. The `DSPyPredictor` base class implements a simple text-to-bool signature with a `MIPROv2` optimizer.
+
+To make an un-optimized prediction, simply initialize a `DSPyPredictor` with some simple instructions:
+
+```python
+from clx.llm import DSPyPredictor
+
+predictor = DSPyPredictor(instructions="Predict whether the following text is a complaint.")
+preds = predictor.predict(texts, num_workers=4)
+```
+
+If you have labeled examples, you can optimize your prompt with the `fit` method:
+
+```python
+from clx.llm import DSPyPredictor
+
+examples = [
+    {"text": "Complaint files by ...", "value": True},
+    ...
+]
+
+predictor.fit(examples, num_workers=4)
+preds = predictor.predict(texts, num_workers=4)
+```
+
+You can save and load your predictor with `predictor.save` and `DSPyPredictor.from_config`:
+
+```python
+predictor.save("predictor.json")
+predictor = DSPyPredictor.from_config("predictor.json")
+```
+
+### GEPAPredictor
+
+The `GEPAPredictor` is a lot more powerful. Use this when you have labeled examples with "reasons" that explain the annotation decision.
+
+```
+examples = [
+    {"text": "Complaint files by ...", "value": True, "reason": "The text is a complaint."},
+    {"text": "Answer to complaint ...", "value": False, "reason": "This merely mentions a complaint, but is not a complaint itself."},
+    ...
+]
+
+predictor = GEPAPredictor(instructions="Predict whether the following text is a complaint.")
+predictor.fit(examples, num_workers=4)
+preds = predictor.predict(texts, num_workers=4)
+```
+
+GEPA uses a student and teacher model to iteratively improve the prompt. You can customize the student model by passing a string or dictionary as the `model` argument. You can also pass `optimizer_args` to customize the optimizer, the `reflection_lm` key being the configuration for the teacher model.
+
+```python
+from clx.llm import GEPAPredictor
+
+predictor = GEPAPredictor(
+    model={"model": "bedrock/qwen.qwen3-235b-a22b-2507-v1:0", "temperature": 1.0, "max_tokens": 32000},
+    optimizer_args={
+        "auto": "heavy",
+        "reflection_lm": {
+            "model": "gemini/gemini-2.5-pro",
+            "temperature": 1.0,
+            "max_tokens": 32000,
+        },
+    },
+)
+```
+
 ## Agents
 
 Use the `Agent` class to use LLMs with tools. For a simple chat use `agent.step`:
