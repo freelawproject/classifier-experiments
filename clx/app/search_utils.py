@@ -92,16 +92,16 @@ class SearchQuerySet(CopyQuerySet):
         self = self.order_by(query["sort"])
         return self
 
-    def page(self, page, page_size=100):
+    def page(self, page, size=100):
         if page < 1:
             raise ValueError("Page number must be greater than 0")
         elif page > 100:
             raise ValueError("Page number must be less than 100")
-        if page_size < 1:
+        if size < 1:
             raise ValueError("Page size must be greater than 0")
-        elif page_size > 1000:
+        elif size > 1000:
             raise ValueError("Page size must be less than 1000")
-        return self[page_size * (page - 1) : page_size * page]
+        return self[size * (page - 1) : size * page]
 
     def _chain(self):
         clone = super()._chain()
