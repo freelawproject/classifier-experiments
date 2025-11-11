@@ -16,9 +16,7 @@ from transformers import (
     PreTrainedModel,
     Trainer,
     TrainingArguments,
-    pipeline,
 )
-from transformers.pipelines.pt_utils import KeyDataset
 
 from clx.settings import CLX_HOME
 
@@ -28,7 +26,7 @@ DEFAULT_RUN_DIR = CLX_HOME / "runs"
 class TrainingRun:
     """Helper for training runs with Hugging Face models."""
 
-    name: str | None = None
+    task: str | None = None
     dataset_cols: ClassVar[list[str]] = [
         "input_ids",
         "attention_mask",
@@ -36,8 +34,6 @@ class TrainingRun:
     ]
     add_config_attrs: ClassVar[list[str]] = []
     trainer_class: type[Trainer] = Trainer
-    pipeline_args: ClassVar[dict] = {}
-    predict_args: ClassVar[dict] = {}
 
     def __init__(
         self,
@@ -71,7 +67,7 @@ class TrainingRun:
     def config(self) -> dict:
         """Get the configuration for the training run."""
         config = {
-            "task": self.name,
+            "task": self.task,
             "run_name": self.run_dir.name,
             "run_dir_parent": str(self.run_dir.parent),
             "base_model_name": self.base_model_name,
@@ -123,11 +119,6 @@ class TrainingRun:
         """Compute metrics method for evaluation."""
         return {}
 
-    def load_pipe(self, **pipeline_args: dict) -> Pipeline:
-        """Load the pipeline."""
-        pipeline_args = {**self.pipeline_args, **pipeline_args}
-        return pipeline(**pipeline_args)
-
     @property
     def tokenizer(self) -> AutoTokenizer:
         """Get the tokenizer."""
@@ -158,9 +149,10 @@ class TrainingRun:
     def pipe(self) -> Pipeline:
         """Inference pipeline for trained model."""
         if self._pipe is None:
-            self._pipe = self.load_pipe(
-                model=self.model,
-                tokenizer=self.tokenizer,
+            from clx.ml import pipeline
+
+            self._pipe = pipeline(
+                task=self.task, model=self.model, tokenizer=self.tokenizer
             )
         return self._pipe
 
@@ -248,24 +240,9 @@ class TrainingRun:
         gc.collect()
         torch.cuda.empty_cache()
 
-    def post_process_prediction(self, prediction: dict) -> dict:
-        """Post-process a prediction."""
-        return prediction
-
-    def predict(
-        self, texts: str | list[str], batch_size: int = 1, **predict_args: dict
-    ) -> list[dict]:
-        """Run predictions batch predictions."""
-        preds = []
-        dataset = KeyDataset(Dataset.from_dict({"text": texts}), "text")
-        predict_args = {
-            "batch_size": batch_size,
-            **self.predict_args,
-            **predict_args,
-        }
-        for out in self.pipe(dataset, **predict_args):
-            preds.append(self.post_process_prediction(out))
-        return preds
+    def predict(self, *args, **kwargs) -> list[dict]:
+        """Run predictions with pipeline."""
+        return self.pipe.predict(*args, **kwargs)
 
     @classmethod
     def from_run_dir(cls, run_dir: Path | str) -> "TrainingRun":

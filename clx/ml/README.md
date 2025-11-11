@@ -76,7 +76,7 @@ Predict outputs a dictionary mapping label names to scores for each example.
 
 ```python
 run = training_run(load=CLX_HOME / "runs" / "my-run-name")
-preds = run.predict(data["text"].tolist(), batch_size=8)
+preds = run.predict(data["text"].tolist(), batch_size=8, return_scores=True)
 print(preds)
 
 """
@@ -117,7 +117,7 @@ Predict outputs a dictionary mapping label names to scores for each example.
 
 ```python
 run = training_run(load=CLX_HOME / "runs" / "my-run-name")
-preds = run.predict(data["text"].tolist(), batch_size=8)
+preds = run.predict(data["text"].tolist(), batch_size=8, return_scores=True)
 print(preds)
 
 """
@@ -131,7 +131,7 @@ Output:
 
 ### Creating a new Training Run
 
-To create a new training run, extend the `TrainingRun` class and register it with the `task_registry` in the `training_runs/__init__.py` file. Here is a template of the various ways you can customize your training run:
+To create a new training run, extend the `TrainingRun` class and register it with the `task_registry` in the `ml/__init__.py` file. Here is a template of the various ways you can customize your training run:
 
 ```python
 from clx.ml import TrainingRun
@@ -148,12 +148,6 @@ class MyTrainingRun(TrainingRun):
     # Optional: If you add any additional arguments to __init__, add them here so
     # they are dumped to the run config (must be JSON-serializable).
     add_config_attrs = ["my-config-attr"]
-
-    # Provide pipeline initialization arguments to the HF pipeline constructor for inference.
-    pipeline_args = {"task": "hf-pipeline-task-name", ...}
-
-    # Optional: Default arguments to pass to `run.pipe` for inference.
-    predict_args = {...}
 
     # Only add this if you want to use a custom Trainer class e.g. for custom loss functions.
     trainer_class = ...
@@ -172,9 +166,36 @@ class MyTrainingRun(TrainingRun):
 
     def compute_metrics(self, eval_pred: tuple[torch.Tensor, torch.Tensor]) -> dict:
         # Implement this for your `compute_metrics` method used by the Trainer.
-
-    def post_process_prediction(self, prediction: dict) -> dict:
-        # Implement this to reformat the prediction returned by the Hugging Face pipeline.
 ```
 
 See the `TrainingRun` implementation for additional hooks and overrides, however these are the main ones you will typically need for a new task.
+
+
+## Pipelines
+
+We use `Pipeline`s as a thin wrapper around the Hugging Face pipelines to standardize the inference pipeline for various tasks. The `Pipeline` class enhances HF pipelines with build-in support for batching and a hook for transforming prediction outputs.
+
+You can load and use a pipeline as follows:
+
+```python
+from clx.ml import pipeline
+
+pipe = pipeline("classification", model="model_path_or_name")
+preds = pipe.predict(texts, batch_size=8, return_scores=True)
+```
+
+To implement a new pipeline you should extend the `Pipeline` class and register it with the `pipeline_registry` in the `ml/__init__.py` file. Here is a template of the various ways you can customize your pipeline:
+
+```python
+from clx.ml import Pipeline
+
+class MyPipeline(Pipeline):
+    """My pipeline."""
+    task = ... # Required: The name of the pipeline.
+    default_pipeline_args: ClassVar[dict] = {...} # Optional: Default arguments to pass to the HF pipeline constructor.
+    default_predict_args: ClassVar[dict] = {...} # Optional: Default arguments to pass to the `predict` method.
+    post_process_keys: ClassVar[list[str]] = [...] # Optional: Keys to pass to the `post_process_prediction` method.
+
+    def post_process_prediction(self, prediction: dict, **kwargs: dict) -> dict:
+        # Implement this to transform the prediction returned by the Hugging Face pipeline.
+```

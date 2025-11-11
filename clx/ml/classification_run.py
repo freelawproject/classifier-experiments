@@ -11,7 +11,7 @@ from .training_run import TrainingRun
 class ClassificationRun(TrainingRun):
     """Multi-class classification run."""
 
-    name = "classification"
+    task = "classification"
     add_config_attrs: ClassVar[list[str]] = ["label_names"]
     pipeline_args: ClassVar[dict] = {"task": "text-classification"}
     predict_args: ClassVar[dict] = {"top_k": None}
