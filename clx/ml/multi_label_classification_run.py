@@ -9,7 +9,7 @@ from .classification_run import ClassificationRun
 class MultiLabelClassificationRun(ClassificationRun):
     """Multi-label classification run."""
 
-    name = "multi-label-classification"
+    task = "multi-label-classification"
 
     def tokenize(self, examples: dict) -> dict:
         """The tokenize function."""

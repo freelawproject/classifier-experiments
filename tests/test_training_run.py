@@ -44,10 +44,8 @@ class TrainingRunTest(TestCase):
 
             run = training_run(load=Path(temp_dir) / "test")
             eval_data["preds"] = run.predict(
-                eval_data["text"].tolist(), batch_size=8
-            )
-            eval_data["preds"] = eval_data["preds"].apply(
-                lambda x: max(x, key=x.get)
+                eval_data["text"].tolist(),
+                batch_size=8,
             )
 
             acc = (eval_data["preds"] == eval_data["label"]).mean()
@@ -88,12 +86,11 @@ class TrainingRunTest(TestCase):
             run.train(train_data, eval_data, overwrite=True)
 
             eval_data["preds"] = run.predict(
-                eval_data["text"].tolist(), batch_size=8
-            )
-            eval_data["preds"] = eval_data["preds"].apply(
-                lambda x: sorted([label for label in x if x[label] > 0.5])
+                eval_data["text"].tolist(),
+                batch_size=8,
             )
             eval_data["labels"] = eval_data["labels"].apply(sorted)
+            eval_data["preds"] = eval_data["preds"].apply(sorted)
 
             acc = (eval_data["preds"] == eval_data["labels"]).mean()
             self.assertEqual(acc, 1.0)
