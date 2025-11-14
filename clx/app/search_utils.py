@@ -2,6 +2,7 @@ import csv
 import random
 from io import StringIO
 
+import pandas as pd
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
 from django.db import connection, models, transaction
@@ -57,7 +58,7 @@ class SearchQuerySet(CopyQuerySet):
                     condition = ~Q(text__icontains=or_part.strip())
                 elif or_part.startswith("^"):
                     or_part = or_part[1:]
-                    condition = Q(text__istartswith=or_part.strip())
+                    condition = Q(text_prefix__istartswith=or_part.strip())
                 else:
                     condition = Q(text__icontains=or_part)
                 if or_condition is None:
@@ -105,7 +106,7 @@ class SearchQuerySet(CopyQuerySet):
 
     def _chain(self):
         clone = super()._chain()
-        clone.table_name = self.table_name
+        clone.model_name = self.model_name
         return clone
 
 
@@ -113,11 +114,11 @@ class SearchQuerySet(CopyQuerySet):
 class SearchManager(CopyManager.from_queryset(SearchQuerySet)):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.table_name = None
+        self.model_name = None
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        queryset.table_name = self.table_name
+        queryset.model_name = self.model_name
         return queryset
 
 
@@ -140,12 +141,30 @@ class SearchDocumentModelBase(models.base.ModelBase):
         """Create a new search document model."""
         new_cls = super().__new__(cls, name, bases, attrs, **kwargs)
         if not new_cls._meta.abstract:
-            new_cls.objects.table_name = new_cls._meta.db_table
+            new_cls.objects.model_name = new_cls.__name__
             new_cls._meta.indexes = [
                 GinIndex(
                     fields=["features"],
                     name=f"{new_cls._meta.db_table}_fs_gin",
-                )
+                ),
+                models.Index(
+                    fields=["shuffle_sort"],
+                    name=f"{new_cls._meta.db_table}_ss_idx",
+                ),
+                models.Index(
+                    fields=["id"],
+                    name=f"{new_cls._meta.db_table}_id_idx",
+                ),
+                models.Index(
+                    fields=["text_prefix"],
+                    name=f"{new_cls._meta.db_table}_pr_idx",
+                    opclasses=["text_pattern_ops"],
+                ),
+                GinIndex(
+                    fields=["text"],
+                    name=f"{new_cls._meta.db_table}_trgm_idx",
+                    opclasses=["gin_trgm_ops"],
+                ),
             ]
         return new_cls
 
@@ -155,6 +174,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
 
     id = models.BigIntegerField(primary_key=True)
     text = models.TextField()
+    text_prefix = models.CharField(max_length=50)
     text_hash = models.CharField(max_length=255)
     features = ArrayField(models.BigIntegerField(), default=list, blank=True)
     shuffle_sort = models.IntegerField()
@@ -162,8 +182,23 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
     objects = SearchManager()
 
     def save(self, *args, **kwargs):
+        self.text_prefix = self.text[:50]
         self.text_hash = generate_hash(self.text)
         super().save(*args, **kwargs)
+
+    @classmethod
+    def batch_df(cls, *columns, batch_size=1000000):
+        last_id = None
+        while 1:
+            q = cls.objects.all()
+            if last_id is not None:
+                q = q.filter(id__gt=last_id)
+            q = q.order_by("id").values(*columns)[:batch_size]
+            data = pd.DataFrame(q)
+            if len(data) == 0:
+                break
+            yield data
+            last_id = data["id"].max()
 
     @classmethod
     def get_project(cls):
@@ -172,7 +207,9 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
             from clx.models import Project
 
             project, _ = Project.objects.get_or_create(
-                name=cls.__name__, table_name=cls._meta.db_table
+                name=cls.__name__,
+                model_name=cls.__name__,
+                slug=cls.__name__.lower(),
             )
             return project
 
@@ -270,6 +307,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
             if cls.objects.exists():
                 start_id = cls.objects.order_by("-id").first().id + 1
             data["id"] = range(start_id, start_id + len(data))
+        data["text_prefix"] = data["text"].apply(lambda x: x[:50])
         data["text_hash"] = data["text"].apply(generate_hash)
         data["shuffle_sort"] = data["text_hash"].apply(
             lambda x: random.randint(0, 100000000)
