@@ -13,8 +13,6 @@ class ClassificationRun(TrainingRun):
 
     task = "classification"
     add_config_attrs: ClassVar[list[str]] = ["label_names"]
-    pipeline_args: ClassVar[dict] = {"task": "text-classification"}
-    predict_args: ClassVar[dict] = {"top_k": None}
 
     def __init__(self, label_names: list[str], *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -69,7 +67,3 @@ class ClassificationRun(TrainingRun):
             raise ValueError(
                 f"Label column must contain only {self.label_names}."
             )
-
-    def post_process_prediction(self, prediction: dict) -> dict:
-        """Post-process a prediction."""
-        return {x["label"]: x["score"] for x in prediction}

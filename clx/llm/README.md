@@ -57,7 +57,7 @@ predictor = DSPyPredictor.from_config("predictor.json")
 
 The `GEPAPredictor` is a lot more powerful. Use this when you have labeled examples with "reasons" that explain the annotation decision.
 
-```
+```python
 examples = [
     {"text": "Complaint files by ...", "value": True, "reason": "The text is a complaint."},
     {"text": "Answer to complaint ...", "value": False, "reason": "This merely mentions a complaint, but is not a complaint itself."},

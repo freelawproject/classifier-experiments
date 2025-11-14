@@ -1,6 +1,7 @@
 from typing import ClassVar
 
 from datasets import Dataset
+from tqdm import tqdm
 from transformers import pipeline as hf_pipeline
 from transformers.pipelines.pt_utils import KeyDataset
 
@@ -27,12 +28,11 @@ class Pipeline:
             self._pipe = hf_pipeline(model=self.model, **self.pipeline_args)
         return self._pipe
 
-    def predict(
-        self, texts: str | list[str], batch_size: int = 1, **kwargs: dict
-    ):
+    def predict(self, examples: list, batch_size: int = 1, **kwargs: dict):
         """Run predictions batch predictions."""
+        examples = self.prepare_examples(examples)
         preds = []
-        dataset = KeyDataset(Dataset.from_dict({"text": texts}), "text")
+        dataset = KeyDataset(Dataset.from_dict({"text": examples}), "text")
         post_process_args = {
             k: v for k, v in kwargs.items() if k in self.post_process_keys
         }
@@ -45,11 +45,18 @@ class Pipeline:
                 if k not in self.post_process_keys
             },
         }
-        for out in self.pipe(dataset, **predict_args):
+        for out in tqdm(
+            self.pipe(dataset, **predict_args),
+            desc="Predicting",
+            total=len(examples),
+        ):
             preds.append(
                 self.post_process_prediction(out, **post_process_args)
             )
         return preds
+
+    def prepare_examples(self, examples: list) -> list:
+        return examples
 
     def post_process_prediction(self, prediction: dict) -> dict:
         """Post-process a prediction."""
