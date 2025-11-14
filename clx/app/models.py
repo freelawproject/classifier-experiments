@@ -1,3 +1,4 @@
+from django.apps import apps
 from django.db import models
 from django.db.models import JSONField, Max
 from django.template.defaultfilters import slugify
@@ -8,8 +9,14 @@ from .search_utils import BaseModel, SearchDocumentModel
 class Project(BaseModel):
     """Model for projects."""
 
-    table_name = models.CharField(max_length=255, unique=True)
     name = models.CharField(max_length=255)
+    model_name = models.CharField(max_length=255, unique=True)
+    slug = models.CharField(max_length=255, unique=True)
+    instructions = models.TextField(null=True, blank=True)
+
+    def get_search_model_class(self):
+        """Get the search model class for the project."""
+        return apps.get_model("app", self.model_name)
 
 
 class Label(BaseModel):
@@ -17,15 +24,15 @@ class Label(BaseModel):
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
-    description = models.TextField(null=True, blank=True)
-    needs_program_update = models.BooleanField(default=True)
+    instructions = models.TextField(null=True, blank=True)
+    needs_predictor_update = models.BooleanField(default=True)
 
     class Meta:
         unique_together = ("project", "name")
 
 
-class Feature(BaseModel):
-    """Model for features."""
+class LabelFeature(BaseModel):
+    """Model for label features."""
 
     name = models.CharField(max_length=255)
     label = models.ForeignKey(
@@ -52,27 +59,27 @@ class LabelDecision(BaseModel):
     reason = models.TextField()
 
 
-class LabelProgram(BaseModel):
-    """Model for label-specific DSPy programs."""
+class LabelPredictor(BaseModel):
+    """Model for label-specific DSPy predictors."""
 
     label = models.ForeignKey(
-        Label, on_delete=models.CASCADE, related_name="programs"
+        Label, on_delete=models.CASCADE, related_name="predictors"
     )
     model = models.CharField(max_length=255)
     teacher_model = models.CharField(max_length=255)
-    program = JSONField()
+    data = JSONField()
     version = models.IntegerField(default=0)
 
     def create(self, *args, **kwargs):
         self.version = (
-            self.label.programs.aggregate(Max("version"))["version__max"] + 1
+            self.label.predictors.aggregate(Max("version"))["version__max"] + 1
         )
-        self.label.needs_program_update = True
+        self.label.needs_predictor_update = True
         self.label.save()
         return super().create(*args, **kwargs)
 
     def fit(self):
-        """Fit the program to the latest decisions."""
+        """Fit the predictor to the latest decisions."""
         raise NotImplementedError("Not implemented")
 
     class Meta:
