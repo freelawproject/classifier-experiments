@@ -72,6 +72,11 @@ class SearchQuerySet(CopyQuerySet):
         return self.filter(and_condition)
 
     def features(self, **query):
+        query = {
+            k: get_feature_ids(v, self.model_name)
+            for k, v in query.items()
+            if v
+        }
         query = FeatureQuery(**query).model_dump()
         if query.get("any"):
             self = self.filter(features__overlap=query["any"])
@@ -85,6 +90,12 @@ class SearchQuerySet(CopyQuerySet):
 
     def search(self, **query):
         """Search for docket entries by query."""
+        if "features" in query:
+            query["features"] = {
+                k: get_feature_ids(v, self.model_name)
+                for k, v in query["features"].items()
+                if v
+            }
         query = SearchQuery(**query).model_dump()
         if query.get("querystring"):
             self = self.querystring(query["querystring"])
@@ -219,7 +230,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         return self.get_project()
 
     @classmethod
-    def bulk_replace_feature(cls, feature, ids):
+    def bulk_replace_feature(cls, feature_id, ids):
         """Bulk replace a feature for a table."""
         entry_table = cls._meta.db_table
         added = removed = 0
@@ -244,7 +255,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
                 WHERE e.id = s.entry_id
                     AND NOT (ARRAY[%s]::bigint[] <@ e.features)
                 """,
-                [feature, feature],
+                [feature_id, feature_id],
             )
             added = cur.rowcount
 
@@ -257,7 +268,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
                         SELECT 1 FROM stage_feature_ids s WHERE s.entry_id = e.id
                     )
                 """,
-                [feature, feature],
+                [feature_id, feature_id],
             )
             removed = cur.rowcount
 
@@ -341,3 +352,21 @@ def get_pg_type(field):
     else:
         raise NotImplementedError(f"Unsupported field type: {type(field)}")
     return pg_type
+
+
+def get_feature_ids(features, model_name):
+    from clx.models import LabelFeature
+
+    if all(isinstance(f, int) for f in features):
+        return features
+    elif all(isinstance(f, LabelFeature) for f in features):
+        return [f.id for f in features]
+    elif all(isinstance(f, str) for f in features):
+        features = LabelFeature.objects.filter(
+            slug__in=features, label__project__model_name=model_name
+        )
+        return [f.id for f in features]
+    else:
+        raise ValueError(
+            "features must be same type, either int, LabelFeature, or feature slug string"
+        )
