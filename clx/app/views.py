@@ -5,48 +5,43 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
-from .models import Label, LabelFeature, Project
+from .models import Label, LabelTag, Project
 
 
 @csrf_exempt
 @require_POST
-def search_endpoint(request, project_slug):
+def search_endpoint(request, project_id):
     try:
-        page_size = 100
         payload = {} if request.body is None else json.loads(request.body)
-        page = payload.get("page", 1)
-        query = payload.get("query", {})
-        count = payload.get("count", False)
-        project = Project.objects.get(slug=project_slug)
-        SearchModel = project.get_search_model_class()
-        q = SearchModel.objects.search(**query)
-        if count:
-            r = {"count": q.count()}
-        else:
-            r = {"data": list(q.values().page(page, size=page_size))}
-        return JsonResponse(r)
+        # payload['params']['tags'] = {"any": ["scales:motion"]}
+        project = Project.objects.get(id=project_id)
+        model = project.get_search_model()
+        return JsonResponse(model.objects.search(**payload))
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
 
-def search_view(request, project_slug):
-    project = Project.objects.get(slug=project_slug)
-    labels = list(Label.objects.filter(project=project).values())
+def search_view(request, project_id):
+    project = Project.objects.get(id=project_id)
+    project.get_search_model().guarantee_tags_rows()
+
+    labels = Label.objects.filter(project=project)
+    labels = labels.values("id", "name")
     labels = {label["id"]: label for label in labels}
-    features = list(
-        LabelFeature.objects.filter(label__project=project).values()
-    )
-    features = {feature["id"]: feature for feature in features}
+
+    tags = LabelTag.objects.filter(label__project=project)
+    tags = tags.values("id", "label_id", "slug")
+    tags = {tag["id"]: tag for tag in tags}
     return render(
         request,
         "search.html",
         {
             "project": project,
             "labels": json.dumps(labels, default=str),
-            "features": json.dumps(features, default=str),
+            "tags": json.dumps(tags, default=str),
         },
     )
 
 
 def index_view(request):
-    return redirect("search", project_slug="docketentry")
+    return redirect("search", project_id="docket-entry")
