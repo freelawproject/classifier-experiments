@@ -9,14 +9,19 @@ from .search_utils import BaseModel, SearchDocumentModel
 class Project(BaseModel):
     """Model for projects."""
 
+    id = models.CharField(max_length=255, primary_key=True)
     name = models.CharField(max_length=255)
     model_name = models.CharField(max_length=255, unique=True)
-    slug = models.CharField(max_length=255, unique=True)
+    tags_model_name = models.CharField(max_length=255, null=True, blank=True)
     instructions = models.TextField(null=True, blank=True)
 
-    def get_search_model_class(self):
+    def get_search_model(self):
         """Get the search model class for the project."""
         return apps.get_model("app", self.model_name)
+
+    def get_tags_model(self):
+        """Get the tags model class for the project."""
+        return apps.get_model("app", self.tags_model_name)
 
 
 class Label(BaseModel):
@@ -31,12 +36,12 @@ class Label(BaseModel):
         unique_together = ("project", "name")
 
 
-class LabelFeature(BaseModel):
-    """Model for label features."""
+class LabelTag(BaseModel):
+    """Model for label tags."""
 
     name = models.CharField(max_length=255)
     label = models.ForeignKey(
-        Label, on_delete=models.CASCADE, related_name="features"
+        Label, on_delete=models.CASCADE, related_name="tags"
     )
     slug = models.CharField(max_length=255)
 
@@ -89,6 +94,8 @@ class LabelPredictor(BaseModel):
 class DocketEntry(SearchDocumentModel):
     """Docket entry model for main document entries."""
 
+    project_id = "docket-entry"
+
     id = models.BigIntegerField(primary_key=True)
     recap_id = models.BigIntegerField(unique=True)
     docket_id = models.BigIntegerField()
@@ -96,8 +103,13 @@ class DocketEntry(SearchDocumentModel):
     date_filed = models.DateField(null=True, blank=True)
 
 
+DocketEntry.create_tags_model()
+
+
 class DocketEntryShort(SearchDocumentModel):
     """Model for attachments and docket entry short descriptions."""
+
+    project_id = "docket-entry-short"
 
     text = models.TextField(unique=True)
     text_type = models.CharField(
@@ -108,3 +120,6 @@ class DocketEntryShort(SearchDocumentModel):
         ],
     )
     count = models.IntegerField(default=0)
+
+
+DocketEntryShort.create_tags_model()

@@ -3,6 +3,7 @@ import random
 from io import StringIO
 
 import pandas as pd
+from django.apps import apps
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
 from django.db import connection, models, transaction
@@ -15,29 +16,43 @@ from clx.utils import generate_hash
 
 
 # Pydantic Models
-class FeatureQuery(PydanticModel):
+class TagParams(PydanticModel):
     any: list[int] = []
     all: list[int] = []
     not_any: list[int] = []
     not_all: list[int] = []
 
 
-class SearchQuery(PydanticModel):
-    features: FeatureQuery = FeatureQuery()
+class SearchParams(PydanticModel):
+    tags: TagParams = TagParams()
     querystring: str | None = None
-    sort: str = "shuffle_sort"
 
 
-class EndpointQuery(SearchQuery):
+class SearchQuery(PydanticModel):
+    params: SearchParams = SearchParams()
+    sort: list[str] = ["shuffle_sort", "id"]
     page: int = 1
     page_size: int = 100
+    count: bool = False
 
 
 # QuerySets
 class SearchQuerySet(CopyQuerySet):
     """QuerySet for search queries."""
 
-    def querystring(self, query):
+    def batch_df(self, *columns, batch_size=1000):
+        last_id = None
+        self = self.order_by("id")
+        while 1:
+            if last_id is not None:
+                self = self.filter(id__gt=last_id)
+            data = pd.DataFrame(self.values(*columns)[:batch_size])
+            if len(data) == 0:
+                break
+            yield data
+            last_id = data["id"].max()
+
+    def querystring(self, value):
         """Apply a querystring to the query.
 
         For querystrings we will do an exact substring match on terms / phrases.
@@ -47,90 +62,89 @@ class SearchQuerySet(CopyQuerySet):
         Carets will be treated as startswith operators.
         We will always assume that ORs are nested in ANDs.
         """
-        assert isinstance(query, str), "Querystring must be a string"
-        and_condition = None
-        for and_part in query.split(","):
-            or_condition = None
-            for or_part in and_part.split("|"):
-                or_part = or_part.strip()
-                if or_part.startswith("~"):
-                    or_part = or_part[1:]
-                    condition = ~Q(text__icontains=or_part.strip())
-                elif or_part.startswith("^"):
-                    or_part = or_part[1:]
-                    condition = Q(text_prefix__istartswith=or_part.strip())
+        if value is not None:
+            assert isinstance(value, str), "Querystring must be a string"
+            and_condition = None
+            for and_part in value.split(","):
+                or_condition = None
+                for or_part in and_part.split("|"):
+                    or_part = or_part.strip()
+                    if or_part.startswith("~"):
+                        or_part = or_part[1:]
+                        condition = ~Q(text__icontains=or_part.strip())
+                    elif or_part.startswith("^"):
+                        or_part = or_part[1:]
+                        condition = Q(text_prefix__istartswith=or_part.strip())
+                    else:
+                        condition = Q(text__icontains=or_part)
+                    if or_condition is None:
+                        or_condition = condition
+                    else:
+                        or_condition |= condition
+                if and_condition is None:
+                    and_condition = or_condition
                 else:
-                    condition = Q(text__icontains=or_part)
-                if or_condition is None:
-                    or_condition = condition
-                else:
-                    or_condition |= condition
-            if and_condition is None:
-                and_condition = or_condition
-            else:
-                and_condition &= or_condition
-        return self.filter(and_condition)
+                    and_condition &= or_condition
+            self = self.filter(and_condition)
+        return self
 
-    def features(self, **query):
-        query = {
-            k: get_feature_ids(v, self.model_name)
-            for k, v in query.items()
-            if v
-        }
-        query = FeatureQuery(**query).model_dump()
-        if query.get("any"):
-            self = self.filter(features__overlap=query["any"])
-        if query.get("all"):
-            self = self.filter(features__contains=query["all"])
-        if query.get("not_any"):
-            self = self.exclude(features__overlap=query["not_any"])
-        if query.get("not_all"):
-            self = self.exclude(features__contains=query["not_all"])
+    def tags(self, **params):
+        params = TagParams(**params).model_dump()
+        if params.get("any"):
+            self = self.filter(tags__overlap=params["any"])
+        if params.get("all"):
+            self = self.filter(tags__contains=params["all"])
+        if params.get("not_any"):
+            self = self.exclude(tags__overlap=params["not_any"])
+        if params.get("not_all"):
+            self = self.exclude(tags__contains=params["not_all"])
         return self
 
     def search(self, **query):
-        """Search for docket entries by query."""
-        if "features" in query:
-            query["features"] = {
-                k: get_feature_ids(v, self.model_name)
-                for k, v in query["features"].items()
+        """Search with params, pagination, and sorting."""
+        # Prepare query
+        if query.get("params", {}).get("tags"):
+            query["params"]["tags"] = {
+                k: get_tag_ids(v, self.model.project_id)
+                for k, v in query["params"]["tags"].items()
                 if v
             }
+
+        # Validate query
         query = SearchQuery(**query).model_dump()
-        if query.get("querystring"):
-            self = self.querystring(query["querystring"])
-        if query.get("features"):
-            self = self.features(**query["features"])
-        self = self.order_by(query["sort"])
-        return self
+        self = self.annotate(tags=models.F("example_tags__tags"))
+
+        # Apply param filters
+        params = query["params"]
+        self = self.querystring(params.get("querystring"))
+        self = self.tags(**params.get("tags", {}))
+
+        # Return count if requested
+        if query.get("count"):
+            return {"total": self.count()}
+
+        # Apply sorting
+        self = self.order_by(*query["sort"])
+
+        # Select columns
+        cols = ["id", "text", "tags"]
+        self = self.values(*cols)
+
+        # Apply pagination
+        self = self.page(query["page"], size=query["page_size"])
+        return {"data": list(self)}
 
     def page(self, page, size=100):
-        if page < 1:
-            raise ValueError("Page number must be greater than 0")
-        elif page > 100:
-            raise ValueError("Page number must be less than 100")
-        if size < 1:
-            raise ValueError("Page size must be greater than 0")
-        elif size > 1000:
-            raise ValueError("Page size must be less than 1000")
+        assert isinstance(page, int), "Page number must be an integer"
+        assert page > 0, "Page number must be greater than 0"
+        assert size > 0, "Page size must be greater than 0"
+        assert size <= 1000, "Page size must be less than 1000"
         return self[size * (page - 1) : size * page]
-
-    def _chain(self):
-        clone = super()._chain()
-        clone.model_name = self.model_name
-        return clone
 
 
 # Queryset Managers
 class SearchManager(CopyManager.from_queryset(SearchQuerySet)):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.model_name = None
-
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        queryset.model_name = self.model_name
-        return queryset
+    pass
 
 
 # Abstract Models
@@ -152,28 +166,23 @@ class SearchDocumentModelBase(models.base.ModelBase):
         """Create a new search document model."""
         new_cls = super().__new__(cls, name, bases, attrs, **kwargs)
         if not new_cls._meta.abstract:
-            new_cls.objects.model_name = new_cls.__name__
+            if new_cls.project_id is None:
+                raise ValueError(
+                    f"{new_cls.__name__} must define a project_id"
+                )
             new_cls._meta.indexes = [
-                GinIndex(
-                    fields=["features"],
-                    name=f"{new_cls._meta.db_table}_fs_gin",
-                ),
                 models.Index(
-                    fields=["shuffle_sort"],
-                    name=f"{new_cls._meta.db_table}_ss_idx",
-                ),
-                models.Index(
-                    fields=["id"],
-                    name=f"{new_cls._meta.db_table}_id_idx",
+                    fields=["shuffle_sort", "id"],
+                    name=f"{new_cls.project_id}_s_idx",
                 ),
                 models.Index(
                     fields=["text_prefix"],
-                    name=f"{new_cls._meta.db_table}_pr_idx",
+                    name=f"{new_cls.project_id}_pr_idx",
                     opclasses=["text_pattern_ops"],
                 ),
                 GinIndex(
                     fields=["text"],
-                    name=f"{new_cls._meta.db_table}_trgm_idx",
+                    name=f"{new_cls.project_id}_trg_idx",
                     opclasses=["gin_trgm_ops"],
                 ),
             ]
@@ -183,11 +192,12 @@ class SearchDocumentModelBase(models.base.ModelBase):
 class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
     """Search document model."""
 
+    project_id = None
+
     id = models.BigIntegerField(primary_key=True)
     text = models.TextField()
     text_prefix = models.CharField(max_length=50)
     text_hash = models.CharField(max_length=255)
-    features = ArrayField(models.BigIntegerField(), default=list, blank=True)
     shuffle_sort = models.IntegerField()
 
     objects = SearchManager()
@@ -198,31 +208,9 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         super().save(*args, **kwargs)
 
     @classmethod
-    def batch_df(cls, *columns, batch_size=1000000):
-        last_id = None
-        while 1:
-            q = cls.objects.all()
-            if last_id is not None:
-                q = q.filter(id__gt=last_id)
-            q = q.order_by("id").values(*columns)[:batch_size]
-            data = pd.DataFrame(q)
-            if len(data) == 0:
-                break
-            yield data
-            last_id = data["id"].max()
-
-    @classmethod
     def get_project(cls):
         """Get the project for the search document."""
-        if not cls._meta.abstract:
-            from clx.models import Project
-
-            project, _ = Project.objects.get_or_create(
-                name=cls.__name__,
-                model_name=cls.__name__,
-                slug=cls.__name__.lower(),
-            )
-            return project
+        return get_search_model_project(cls)
 
     @property
     def project(self):
@@ -230,45 +218,99 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         return self.get_project()
 
     @classmethod
-    def bulk_replace_feature(cls, feature_id, ids):
-        """Bulk replace a feature for a table."""
-        entry_table = cls._meta.db_table
+    def create_tags_model(cls):
+        model_name = f"{cls.__name__}Tags"
+
+        attrs = {
+            "__module__": cls.__module__,
+            "is_tag_model": True,
+            "project_id": cls.project_id,
+            "id": models.OneToOneField(
+                cls,
+                on_delete=models.CASCADE,
+                primary_key=True,
+                db_column="id",
+                related_name="example_tags",
+            ),
+            "tags": ArrayField(
+                models.BigIntegerField(), default=list, blank=True
+            ),
+            "objects": CopyManager(),
+            "get_project": classmethod(get_search_model_project),
+            "project": property(lambda self: self.get_project()),
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "db_table": f"{cls._meta.db_table}_tags",
+                    "indexes": [
+                        GinIndex(
+                            fields=["tags"],
+                            name=f"{cls._meta.db_table}_t_gin",
+                        ),
+                    ],
+                },
+            ),
+        }
+
+        TagsModel = type(model_name, (models.Model,), attrs)
+        return TagsModel
+
+    @classmethod
+    def guarantee_tags_rows(cls):
+        q = cls.objects.filter(example_tags__isnull=True)
+        if q.exists():
+            for data in q.batch_df("id", batch_size=500000):
+                tags_model = cls.get_project().get_tags_model()
+                f = StringIO()
+                data.to_csv(f, index=False)
+                f.seek(0)
+                tags_model.objects.from_csv(
+                    f,
+                    static_mapping={"tags": "{}"},
+                )
+
+    @classmethod
+    def bulk_replace_tag(cls, tag, ids):
+        """Bulk replace a tags for a table."""
+        tag_id = get_tag_ids([tag], cls.project_id)[0]
+        tags_table = cls.get_project().get_tags_model()._meta.db_table
         added = removed = 0
 
         with transaction.atomic(), connection.cursor() as cur:
             cur.execute(
-                "CREATE TEMP TABLE stage_feature_ids(entry_id BIGINT) ON COMMIT DROP;"
+                "CREATE TEMP TABLE stage_tag_ids(example_id BIGINT) ON COMMIT DROP;"
             )
-            cur.execute("CREATE INDEX ON stage_feature_ids(entry_id);")
+            cur.execute("CREATE INDEX ON stage_tag_ids(example_id);")
 
-            buf = StringIO("".join(f"{i}\n" for i in ids))
+            f = StringIO("".join(f"{i}\n" for i in ids))
             cur.copy_expert(
-                "COPY stage_feature_ids (entry_id) FROM STDIN WITH (FORMAT CSV)",
-                buf,
+                "COPY stage_tag_ids (example_id) FROM STDIN WITH (FORMAT CSV)",
+                f,
             )
 
             cur.execute(
                 f"""
-                UPDATE {entry_table} e
-                SET features = array_cat(e.features, ARRAY[%s]::bigint[])
-                FROM stage_feature_ids s
-                WHERE e.id = s.entry_id
-                    AND NOT (ARRAY[%s]::bigint[] <@ e.features)
+                UPDATE {tags_table} t
+                SET tags = array_cat(t.tags, ARRAY[%s]::bigint[])
+                FROM stage_tag_ids s
+                WHERE t.id = s.example_id
+                    AND NOT (t.tags @> ARRAY[%s]::bigint[])
                 """,
-                [feature_id, feature_id],
+                [tag_id, tag_id],
             )
             added = cur.rowcount
 
             cur.execute(
                 f"""
-                UPDATE {entry_table} e
-                SET features = array_remove(e.features, %s)
-                WHERE (ARRAY[%s]::bigint[] <@ e.features)
+                UPDATE {tags_table} t
+                SET tags = array_remove(t.tags, %s)
+                WHERE t.tags @> ARRAY[%s]::bigint[]
                     AND NOT EXISTS (
-                        SELECT 1 FROM stage_feature_ids s WHERE s.entry_id = e.id
+                        SELECT 1 FROM stage_tag_ids s WHERE s.example_id = t.id
                     )
                 """,
-                [feature_id, feature_id],
+                [tag_id, tag_id],
             )
             removed = cur.rowcount
 
@@ -285,18 +327,18 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
 
         table = cls._meta.db_table
 
-        buf = StringIO()
-        writer = csv.writer(buf)
+        f = StringIO()
+        writer = csv.writer(f)
         for k, v in zip(ids, values):
             writer.writerow([k, "" if v is None else v])
-        buf.seek(0)
+        f.seek(0)
         with transaction.atomic(), connection.cursor() as cur:
             cur.execute(
                 f"CREATE TEMP TABLE stage_updates(id {id_type}, val text) ON COMMIT DROP;"
             )
             cur.copy_expert(
                 "COPY stage_updates (id, val) FROM STDIN WITH (FORMAT CSV)",
-                buf,
+                f,
             )
             cur.execute(
                 f"""
@@ -331,18 +373,25 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
             static_mapping={
                 "created_at": timezone.now(),
                 "updated_at": timezone.now(),
-                "features": "{}",
             },
             **kwargs,
         )
+        cls.guarantee_tags_rows()
 
     class Meta:
         abstract = True
-        ordering = ["shuffle_sort"]
         indexes = []
 
 
 # Utils
+def get_search_model_project(cls):
+    """Get the project for a search document or search tags model."""
+    if cls.project_id is not None:
+        from .models import Project
+
+        return Project.objects.get(id=cls.project_id)
+
+
 def get_pg_type(field):
     """Get the PostgreSQL type for a field."""
     if isinstance(field, (models.IntegerField | models.BigIntegerField)):
@@ -354,19 +403,44 @@ def get_pg_type(field):
     return pg_type
 
 
-def get_feature_ids(features, model_name):
-    from clx.models import LabelFeature
+def get_tag_ids(tags, project_id):
+    from clx.models import LabelTag
 
-    if all(isinstance(f, int) for f in features):
-        return features
-    elif all(isinstance(f, LabelFeature) for f in features):
-        return [f.id for f in features]
-    elif all(isinstance(f, str) for f in features):
-        features = LabelFeature.objects.filter(
-            slug__in=features, label__project__model_name=model_name
+    if all(isinstance(tag, int) for tag in tags):
+        return tags
+    elif all(isinstance(tag, LabelTag) for tag in tags):
+        return [tag.id for tag in tags]
+    elif all(isinstance(tag, str) for tag in tags):
+        tags = LabelTag.objects.filter(
+            slug__in=tags, label__project__id=project_id
         )
-        return [f.id for f in features]
+        return [tag.id for tag in tags]
     else:
         raise ValueError(
-            "features must be same type, either int, LabelFeature, or feature slug string"
+            "tags must be same type, either int, LabelTag, or tag slug string"
         )
+
+
+def init_search_models(**kwargs):
+    """Create a project for each SearchDocumentModel.
+
+    Then register the associated tags model.
+    """
+    from .models import Project
+
+    for model in apps.get_models():
+        if issubclass(model, SearchDocumentModel):
+            project, created = Project.objects.get_or_create(
+                id=model.project_id,
+                model_name=model.__name__,
+            )
+            if created:
+                project.name = model.__name__
+                project.save()
+
+    for model in apps.get_models():
+        if hasattr(model, "is_tag_model") and model.is_tag_model:
+            project = Project.objects.get(id=model.project_id)
+            if project.tags_model_name != model.__name__:
+                project.tags_model_name = model.__name__
+                project.save()

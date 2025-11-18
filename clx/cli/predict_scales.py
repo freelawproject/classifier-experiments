@@ -10,11 +10,14 @@ from clx.utils import pd_save_or_append
 
 from .cache_datasets import CACHED_DATASET_DIR
 
-FEATURE_PATH = DATA_DIR / "features" / "scales.csv"
+TAG_PATH = DATA_DIR / "tags" / "scales.csv"
 
 scales2label = {
-    "complaint": "Complaint",
+    # "complaint": "Complaint",
     "motion": "Motion",
+    "order": "Order",
+    "stipulation": "Stipulation",
+    "motion for summary judgment": "Motion for Summary Judgment",
 }
 
 
@@ -30,16 +33,14 @@ scales2label = {
 )
 def predict_scales(do_import, reset):
     """Make predictions using the scales model across the docket sample."""
-    FEATURE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TAG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     existing_ids = []
-    if FEATURE_PATH.exists():
+    if TAG_PATH.exists():
         if reset:
-            FEATURE_PATH.unlink()
+            TAG_PATH.unlink()
         else:
-            existing_ids = pd.read_csv(FEATURE_PATH, usecols=["id"])[
-                "id"
-            ].tolist()
+            existing_ids = pd.read_csv(TAG_PATH, usecols=["id"])["id"].tolist()
 
     if not do_import:
         pipe = pipeline(
@@ -58,7 +59,7 @@ def predict_scales(do_import, reset):
             ),
         )
         for data in pd.read_csv(
-            CACHED_DATASET_DIR / "DocketEntry.csv", chunksize=5000
+            CACHED_DATASET_DIR / "DocketEntry.csv", chunksize=20000
         ):
             progress.update(len(data))
             data = data[~data["id"].isin(existing_ids)]
@@ -66,26 +67,25 @@ def predict_scales(do_import, reset):
                 data["labels"] = pipe.predict(
                     data["text"].tolist(), batch_size=16
                 )
-                pd_save_or_append(data, FEATURE_PATH)
+                pd_save_or_append(data, TAG_PATH)
     else:
-        from clx.models import DocketEntry, Label, LabelFeature
+        from clx.models import DocketEntry, Label, LabelTag
 
-        data = pd.read_csv(FEATURE_PATH, usecols=["id", "labels"])
+        data = pd.read_csv(TAG_PATH, usecols=["id", "labels"])
         data["labels"] = data["labels"].apply(lambda x: ast.literal_eval(x))
         data = data.explode("labels").dropna()
         data = data[data["labels"].isin(scales2label.keys())]
 
         project = DocketEntry.get_project()
         for scales_label, label_name in tqdm(
-            scales2label.items(), desc="Importing features"
+            scales2label.items(), desc="Importing tags"
         ):
             label, _ = Label.objects.get_or_create(
                 project=project, name=label_name
             )
-            feature, _ = LabelFeature.objects.get_or_create(
-                label=label, name="scales"
-            )
-            feature_ids = list(
+            tag, _ = LabelTag.objects.get_or_create(label=label, name="scales")
+            example_ids = list(
                 data[data["labels"] == scales_label]["id"].unique()
             )
-            DocketEntry.bulk_replace_feature(feature.id, feature_ids)
+            print(f"Importing {len(example_ids)} tags for {label_name}")
+            DocketEntry.bulk_replace_tag(tag.id, example_ids)
