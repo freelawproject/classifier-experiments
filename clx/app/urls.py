@@ -4,7 +4,7 @@ from . import views
 
 urlpatterns = [
     path("", views.index_view),
-    path("<slug:project_id>/", views.search_view, name="search"),
+    path("search/<slug:project_id>/", views.search_view, name="search"),
     path(
         "api/search/<slug:project_id>/",
         views.search_endpoint,

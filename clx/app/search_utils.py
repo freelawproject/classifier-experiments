@@ -116,8 +116,8 @@ class SearchQuerySet(CopyQuerySet):
 
         # Apply param filters
         params = query["params"]
-        self = self.querystring(params.get("querystring"))
         self = self.tags(**params.get("tags", {}))
+        self = self.querystring(params.get("querystring"))
 
         # Return count if requested
         if query.get("count"):
@@ -268,6 +268,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
                 tags_model.objects.from_csv(
                     f,
                     static_mapping={"tags": "{}"},
+                    ignore_conflicts=True,
                 )
 
     @classmethod
