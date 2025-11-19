@@ -23,7 +23,6 @@ def search_endpoint(request, project_id):
 
 def search_view(request, project_id):
     project = Project.objects.get(id=project_id)
-    project.get_search_model().guarantee_tags_rows()
 
     labels = Label.objects.filter(project=project)
     labels = labels.values("id", "name")
@@ -37,6 +36,7 @@ def search_view(request, project_id):
         "search.html",
         {
             "project": project,
+            "projects": Project.objects.all().order_by("name"),
             "labels": json.dumps(labels, default=str),
             "tags": json.dumps(tags, default=str),
         },

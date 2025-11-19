@@ -6,7 +6,31 @@
     <!-- Navbar -->
     <nav class="h-12 sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-gray-200">
         <div class="max-w-[1460px] mx-auto h-full px-4 flex items-center justify-between">
-            <div class="text-lg font-semibold">{{ project.name }}</div>
+            <div x-data="{ open: false }">
+                <div class="relative">
+                    <button
+                        type="button"
+                        class="font-medium inline-flex items-center gap-2 text-start"
+                        @click="open = !open"
+                        :aria-expanded="open ? 'true' : 'false'"
+                    >
+                        <span class="text-lg font-semibold">{{ project.name }}</span>
+                        <i class="fa-solid fa-chevron-down transition-transform duration-150" :class="open ? 'rotate-180' : ''"></i>
+                    </button>
+                    <div
+                        x-show="open" x-cloak
+                        @click.outside="open = false"
+                        class="absolute z-10 mt-1 w-56 rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-black/5"
+                    >
+                        {% for p in projects %}
+                            <a
+                                href="/search/{{ p.id }}/"
+                                class="block w-full text-left px-3 py-1.5 hover:bg-gray-50"
+                            >{{ p.name }}</a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
         </div>
     </nav>
 
@@ -18,6 +42,7 @@
         <div class="grid grid-cols-[18rem_minmax(0,1fr)_18rem] gap-4 h-[calc(100vh-3rem)]">
             <!-- Left -->
             <aside class="bg-white border rounded-lg shadow-sm my-4 p-4 overflow-hidden">
+                <!-- Search header -->
                 <div class="flex items-center justify-between mb-3">
                     <h2 class="font-medium">Search</h2>
                     <div class="text-sm text-gray-500" x-text="total" x-show="total"></div>
@@ -28,6 +53,7 @@
                         :disabled="loading"
                     >Count</button>
                 </div>
+                <!-- Querystring field -->
                 <div class="mb-1" x-data="{open: false}">
                     <div class="flex items-center justify-between">
                         <label class="block text-sm text-gray-600">Querystring</label>
@@ -46,6 +72,7 @@
                     >
                         <ul class="list-disc pl-4 space-y-1">
                             <li>Exact substring match on terms or phrases</li>
+                            <li>Case insensitive</li>
                             <li>Use comma for AND, pipe for OR, tilde for NOT, caret for startswith</li>
                             <li>ORs are grouped within AND clauses</li>
                         </ul>
@@ -63,6 +90,135 @@
                     placeholder="Enter query…"
                     class="w-full p-2 rounded-md ring-1 ring-gray-300 focus:ring-blue-500"
                 />
+                <!-- Tags fields -->
+                <div class="mt-3 space-y-2" x-data="{
+                    tagGroups: [
+                        { key: 'any', name: 'Has any:' },
+                        { key: 'all', name: 'Has all:' },
+                        { key: 'not_any', name: 'Does not have any:' },
+                        { key: 'not_all', name: 'Does not have all:' },
+                    ],
+                    toggleTag(groupKey, tagId) {
+                        if (!this.params?.tags?.[groupKey]) return;
+                        const selected = this.params.tags[groupKey];
+                        const idx = selected.indexOf(tagId);
+                        if (idx === -1) {
+                            selected.push(tagId);
+                        } else {
+                            selected.splice(idx, 1);
+                        }
+                    },
+                    isTagSelected(groupKey, tagId) {
+                        return (this.params?.tags?.[groupKey] || []).includes(tagId);
+                    },
+                    clearTags(groupKey) {
+                        if (this.params?.tags?.[groupKey]) {
+                            this.params.tags[groupKey] = [];
+                        }
+                    },
+                    orderedTags() {
+                        const all = Object.values(this.tags || {});
+                        if (!this.activeLabelId) {
+                            // Sort others by slug for stability when no active label
+                            return {
+                                preferred: [],
+                                others: all.slice().sort((a, b) => a.slug.localeCompare(b.slug)),
+                            };
+                        }
+                        const preferred = [];
+                        const others = [];
+                        for (const t of all) {
+                            if (t.label_id === this.activeLabelId) {
+                                preferred.push(t);
+                            } else {
+                                others.push(t);
+                            }
+                        }
+                        preferred.sort((a, b) => a.slug.localeCompare(b.slug));
+                        others.sort((a, b) => a.slug.localeCompare(b.slug));
+                        return { preferred, others };
+                    },
+                }">
+                    <label class="block text-sm text-gray-600">Tags</label>
+                    <template x-for="group in tagGroups" :key="group.key">
+                        <div class="mb-1" x-data="{ open: false }">
+                            <div class="flex items-center justify-between">
+                                <label class="block text-xs text-gray-600 font-medium" x-text="group.name"></label>
+                                <div class="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        class="text-xs text-gray-500 hover:text-gray-700"
+                                        @click="clearTags(group.key)"
+                                        x-show="(params.tags?.[group.key] || []).length"
+                                    >Clear</button>
+                                    <button
+                                        type="button"
+                                        class="text-gray-500 hover:text-gray-700"
+                                        @click="open = !open"
+                                        :aria-expanded="open ? 'true' : 'false'"
+                                    >
+                                        <i class="fa-solid fa-chevron-down transition-transform duration-150" :class="open ? 'rotate-180' : ''"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- Collapsed summary of selected tags -->
+                            <div class="mt-1" x-show="!open && (params.tags?.[group.key] || []).length" x-cloak>
+                                <div class="flex flex-wrap gap-1">
+                                    <template x-for="tid in (params.tags?.[group.key] || [])" :key="`${group.key}-chip-${tid}`">
+                                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs text-gray-700" x-text="tags?.[tid]?.slug || tid"></span>
+                                    </template>
+                                </div>
+                            </div>
+                            <!-- Dropdown -->
+                            <div
+                                x-show="open" x-cloak
+                                @click.outside="open = false"
+                                class="mt-1 rounded-md border border-gray-200 bg-white text-sm shadow-lg"
+                            >
+                                <div class="max-h-64 overflow-auto py-1">
+                                    <!-- Preferred for active label -->
+                                    <template x-if="orderedTags().preferred.length">
+                                        <div>
+                                            <div class="px-3 py-1.5 text-xs font-medium text-gray-600">Active label</div>
+                                            <template x-for="t in orderedTags().preferred" :key="`preferred-${group.key}-${t.id}`">
+                                                <button
+                                                    type="button"
+                                                    class="flex w-full items-center text-start justify-between px-3 py-1.5 hover:bg-gray-50"
+                                                    @click="toggleTag(group.key, t.id)"
+                                                >
+                                                    <span x-text="t.slug"></span>
+                                                    <span
+                                                        class="ml-2 h-4 w-4 rounded border border-gray-300 flex items-center justify-center"
+                                                        :class="isTagSelected(group.key, t.id) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white text-transparent'"
+                                                    >
+                                                        <i class="fa-solid fa-check text-[10px] leading-none"></i>
+                                                    </span>
+                                                </button>
+                                            </template>
+                                            <div class="my-1 border-t-2 border-gray-200"></div>
+                                        </div>
+                                    </template>
+                                    <!-- Other tags -->
+                                    <template x-for="t in orderedTags().others" :key="`other-${group.key}-${t.id}`">
+                                        <button
+                                            type="button"
+                                            class="flex w-full items-center text-start justify-between px-3 py-1.5 hover:bg-gray-50"
+                                            @click="toggleTag(group.key, t.id)"
+                                        >
+                                            <span x-text="t.slug"></span>
+                                            <span
+                                                class="ml-2 h-4 w-4 rounded border border-gray-300 flex items-center justify-center"
+                                                :class="isTagSelected(group.key, t.id) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white text-transparent'"
+                                            >
+                                                <i class="fa-solid fa-check text-[10px] leading-none"></i>
+                                            </span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
                 <button
                     @click="search()"
                     class="w-full mt-3 inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
@@ -89,7 +245,11 @@
                             </div>
                             <div class="flex flex-wrap gap-2">
                                 <template x-for="tag_id in result.tags" :key="tag_id">
-                                    <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs text-gray-700" x-text="tags?.[tag_id]?.slug"></span>
+                                    <span
+                                        class="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs text-gray-700"
+                                        x-text="tags?.[tag_id]?.slug"
+                                        x-show="tags?.[tag_id]?.slug"
+                                    ></span>
                                 </template>
                             </div>
                         </div>
@@ -103,7 +263,7 @@
                     <div class="relative">
                         <button
                             type="button"
-                            class="font-medium inline-flex items-center gap-2"
+                            class="font-medium inline-flex items-center gap-2 text-start"
                             @click="open = !open"
                             :aria-expanded="open ? 'true' : 'false'"
                         >
@@ -115,13 +275,16 @@
                             @click.outside="open = false"
                             class="absolute z-10 mt-1 w-56 rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-black/5"
                         >
-                            <template x-for="(label, idx) in Object.values(labels || {})" :key="label.id || idx">
+                            <template
+                                x-for="(label, label_id) in Object.values(labels || {}).sort((a, b) => a.name.localeCompare(b.name))"
+                                :key="label_id"
+                            >
                                 <button
                                     type="button"
                                     class="block w-full text-left px-3 py-1.5 hover:bg-gray-50"
-                                    @click="setActiveLabelId(label.id); open = false"
+                                    @click="setActiveLabelId(label_id); open = false"
                                 >
-                                    <span x-text="label.name || label"></span>
+                                    <span x-text="label.name"></span>
                                 </button>
                             </template>
                         </div>
@@ -141,6 +304,12 @@
                 activeLabelId: null,
                 params: {
                     querystring: '',
+                    tags: {
+                        any: [],
+                        all: [],
+                        not_any: [],
+                        not_all: [],
+                    },
                 },
                 page: 1,
                 results: null,
