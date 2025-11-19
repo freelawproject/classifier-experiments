@@ -5,10 +5,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from clx.ml import pipeline
-from clx.settings import DATA_DIR
+from clx.settings import CACHED_DATASET_DIR, DATA_DIR
 from clx.utils import pd_save_or_append
-
-from .cache_datasets import CACHED_DATASET_DIR
 
 TAG_PATH = DATA_DIR / "tags" / "scales.csv"
 
@@ -54,12 +52,12 @@ def predict_scales(do_import, reset):
             desc="Total",
             total=len(
                 pd.read_csv(
-                    CACHED_DATASET_DIR / "DocketEntry.csv", usecols=["id"]
+                    CACHED_DATASET_DIR / "docket-entry.csv", usecols=["id"]
                 )
             ),
         )
         for data in pd.read_csv(
-            CACHED_DATASET_DIR / "DocketEntry.csv", chunksize=20000
+            CACHED_DATASET_DIR / "docket-entry.csv", chunksize=20000
         ):
             progress.update(len(data))
             data = data[~data["id"].isin(existing_ids)]

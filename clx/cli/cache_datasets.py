@@ -1,10 +1,8 @@
 import click
 from tqdm import tqdm
 
-from clx.settings import DATA_DIR
-from clx.utils import pd_save_or_append
-
-CACHED_DATASET_DIR = DATA_DIR / "search_datasets"
+from clx import pd_save_or_append
+from clx.settings import CACHED_DATASET_DIR
 
 
 @click.command()
@@ -16,7 +14,7 @@ def cache_datasets():
 
     for project in tqdm(Project.objects.all(), desc="Caching datasets"):
         model = project.get_search_model()
-        dataset_path = CACHED_DATASET_DIR / f"{model.__name__}.csv"
+        dataset_path = CACHED_DATASET_DIR / f"{project.id}.csv"
         if dataset_path.exists():
             dataset_path.unlink()
         for data in model.objects.batch_df("id", "text", batch_size=500000):

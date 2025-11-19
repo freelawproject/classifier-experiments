@@ -12,6 +12,7 @@ else:
     CLX_HOME = Path(os.getenv("CLX_HOME", Path.home() / "clx"))
 DATA_DIR = Path(CLX_HOME / "data")
 CONFIG_PATH = Path.home() / ".cache" / "clx" / "config.json"
+CACHED_DATASET_DIR = DATA_DIR / "search_datasets"
 
 SECRET_KEY = os.getenv("SECRET_KEY", get_random_secret_key())
 DEBUG = os.getenv("DEBUG", "off") == "on"
