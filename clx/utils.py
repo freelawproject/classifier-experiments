@@ -10,6 +10,8 @@ import regex as re
 import requests
 from tqdm import tqdm
 
+tqdm.pandas()
+
 
 def init_django():
     """Initializes Django."""
