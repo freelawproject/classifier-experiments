@@ -13,6 +13,11 @@ def custom_heuristic(project_id, label_name):
     return decorator
 
 
+def within_first(text, term, n):
+    first_n = " ".join(text.split()[:n])
+    return term in first_n
+
+
 @custom_heuristic("docket-entry", "Motion")
-def startswith_motion_caps(text, **kwargs):
-    return text.startswith("MOTION")
+def first_3_motion(text, **kwargs):
+    return within_first(text.lower(), "motion", 3)

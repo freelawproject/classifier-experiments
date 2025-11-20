@@ -4,10 +4,52 @@ from . import views
 
 urlpatterns = [
     path("", views.index_view),
-    path("search/<slug:project_id>/", views.search_view, name="search"),
     path(
-        "api/search/<slug:project_id>/",
+        "project/<slug:project_id>/search/", views.search_view, name="search"
+    ),
+    path(
+        "api/project/<slug:project_id>/search/",
         views.search_endpoint,
         name="search-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/labels/",
+        views.labels_endpoint,
+        name="labels-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/tags/",
+        views.tags_endpoint,
+        name="tags-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/heuristics/<int:label_id>/",
+        views.heuristics_endpoint,
+        name="heuristics-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/heuristic/add/",
+        views.heuristic_add_endpoint,
+        name="heuristic-add-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/heuristics/apply/",
+        views.heuristic_apply_endpoint,
+        name="heuristic-apply-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/heuristics/set-flag/",
+        views.heuristic_set_flag_endpoint,
+        name="heuristic-set-flag-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/heuristics/delete/",
+        views.heuristic_delete_endpoint,
+        name="heuristic-delete-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/heuristics/sync-custom/",
+        views.heuristics_sync_custom_endpoint,
+        name="heuristics-sync-custom-endpoint",
     ),
 ]

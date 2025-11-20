@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="bg-gray-50 text-gray-900">
+<div class="bg-gray-50 text-gray-900" x-data="searchComponent('/api/project/{{ project.id }}/')" x-init="init()">
 
     <!-- Navbar -->
     <nav class="h-12 sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-gray-200">
@@ -24,10 +24,79 @@
                     >
                         {% for p in projects %}
                             <a
-                                href="/search/{{ p.id }}/"
+                                href="/project/{{ p.id }}/search/"
                                 class="block w-full text-left px-3 py-1.5 hover:bg-gray-50"
                             >{{ p.name }}</a>
                         {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="relative" x-data="{ open: false }" x-show="jobsPending().length" x-cloak>
+                    <button
+                        type="button"
+                        class="text-gray-500 hover:text-gray-700"
+                        @click="open = !open"
+                    >
+                        <i class="fa-solid fa-spinner fa-spin"></i>
+                    </button>
+                    <div
+                        x-show="open" x-cloak
+                        @click.outside="open = false"
+                        class="absolute right-0 mt-1 w-96 max-w-[90vw] rounded-md bg-white py-2 text-sm shadow-lg ring-1 ring-black/5"
+                    >
+                        <template x-for="item in jobsPending()" :key="item[0]">
+                            <div class="px-3 py-2 border-b border-gray-200 last:border-b-0">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="font-medium text-gray-900 truncate" x-text="item[1]?.name || 'Job'"></div>
+                                        <div class="text-xs text-gray-600 flex items-center gap-1">
+                                            <i class="fa-solid fa-spinner fa-spin text-gray-400 me-2"></i>
+                                            <span>In progress…</span>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class="text-gray-500 hover:text-gray-700 shrink-0"
+                                        @click="dismissJob(item[0]); if (jobsPending().length === 0) open = false;"
+                                    >
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+                <div class="relative" x-data="{ open: false }" x-show="jobsErrors().length" x-cloak>
+                    <button
+                        type="button"
+                        class="text-red-600 hover:text-red-700"
+                        @click="open = !open"
+                    >
+                        <i class="fa-solid fa-circle-exclamation"></i>
+                    </button>
+                    <div
+                        x-show="open" x-cloak
+                        @click.outside="open = false"
+                        class="absolute right-0 mt-1 w-96 max-w-[90vw] rounded-md bg-white py-2 text-sm shadow-lg ring-1 ring-black/5"
+                    >
+                        <template x-for="item in jobsErrors()" :key="item[0]">
+                            <div class="px-3 py-2 border-b border-gray-200 last:border-b-0">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="font-medium text-gray-900 truncate" x-text="item[1]?.name || 'Job'"></div>
+                                        <div class="text-xs text-red-700 break-words whitespace-pre-wrap" x-text="String(item[1]?.error || '')"></div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class="text-gray-500 hover:text-gray-700 shrink-0"
+                                        @click="dismissJob(item[0]);"
+                                    >
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
                     </div>
                 </div>
             </div>
@@ -35,10 +104,7 @@
     </nav>
 
     <!-- Search -->
-    <div
-        x-data="searchComponent('/api/search/{{ project.id }}/')"
-        class="max-w-[1460px] mx-auto px-4"
-    >
+    <div class="max-w-[1460px] mx-auto px-4">
         <div class="grid grid-cols-[18rem_minmax(0,1fr)_18rem] gap-4 h-[calc(100vh-3rem)]">
             <!-- Left -->
             <aside class="bg-white border rounded-lg shadow-sm my-4 p-4 overflow-hidden">
@@ -90,6 +156,14 @@
                     placeholder="Enter query…"
                     class="w-full p-2 rounded-md ring-1 ring-gray-300 focus:ring-blue-500"
                 />
+                <div class="mt-2 flex items-center justify-end">
+                    <span
+                        role="button"
+                        @click="(params.querystring && params.querystring.trim()) ? createHeuristic() : null"
+                        class="inline-flex items-center rounded-md bg-gray-200 px-2 py-1 text-xs text-gray-700"
+                        :class="(params.querystring && params.querystring.trim()) ? 'cursor-pointer hover:bg-gray-300' : 'opacity-50 pointer-events-none'"
+                    >Save as heuristic</span>
+                </div>
                 <!-- Tags fields -->
                 <div class="mt-3 space-y-2" x-data="{
                     tagGroups: [
@@ -118,8 +192,7 @@
                     },
                     orderedTags() {
                         const all = Object.values(this.tags || {});
-                        if (!this.activeLabelId) {
-                            // Sort others by slug for stability when no active label
+                        if (!activeLabelId) {
                             return {
                                 preferred: [],
                                 others: all.slice().sort((a, b) => a.slug.localeCompare(b.slug)),
@@ -128,7 +201,7 @@
                         const preferred = [];
                         const others = [];
                         for (const t of all) {
-                            if (t.label_id === this.activeLabelId) {
+                            if (t.label_id === activeLabelId) {
                                 preferred.push(t);
                             } else {
                                 others.push(t);
@@ -186,7 +259,7 @@
                                                     class="flex w-full items-center text-start justify-between px-3 py-1.5 hover:bg-gray-50"
                                                     @click="toggleTag(group.key, t.id)"
                                                 >
-                                                    <span x-text="t.slug"></span>
+                                                    <span class="break-all" x-text="t.slug"></span>
                                                     <span
                                                         class="ml-2 h-4 w-4 rounded border border-gray-300 flex items-center justify-center"
                                                         :class="isTagSelected(group.key, t.id) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white text-transparent'"
@@ -205,7 +278,7 @@
                                             class="flex w-full items-center text-start justify-between px-3 py-1.5 hover:bg-gray-50"
                                             @click="toggleTag(group.key, t.id)"
                                         >
-                                            <span x-text="t.slug"></span>
+                                            <span class="break-all" x-text="t.slug"></span>
                                             <span
                                                 class="ml-2 h-4 w-4 rounded border border-gray-300 flex items-center justify-center"
                                                 :class="isTagSelected(group.key, t.id) ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white text-transparent'"
@@ -230,32 +303,204 @@
             </aside>
 
             <!-- Center -->
-            <main class="overflow-y-auto" x-ref="resultsContainer">
+            <div class="flex flex-col min-h-0">
+                <div class="bg-white border rounded-lg shadow-sm my-4 overflow-hidden">
+                    <nav
+                        class="grid grid-cols-5 w-full divide-x divide-gray-200"
+                        x-data="{ tabs: [
+                            { key: 'search', label: 'Search' },
+                            { key: 'decisions', label: 'Decisions' },
+                            { key: 'heuristics', label: 'Heuristics' },
+                            { key: 'predictor', label: 'Predictor' },
+                            { key: 'finetunes', label: 'Finetunes' },
+                        ] }"
+                    >
+                        <template x-for="t in tabs" :key="t.key">
+                            <button
+                                type="button"
+                                role="tab"
+                                @click="activeTab = t.key"
+                                :aria-selected="activeTab === t.key"
+                                class="px-4 py-2 text-sm text-center transition"
+                                :class="activeTab === t.key ? 'bg-gray-100 text-gray-900' : 'bg-white text-gray-700 hover:bg-gray-50'"
+                                x-text="t.label"
+                            ></button>
+                        </template>
+                    </nav>
+                </div>
+
                 <!-- Error box -->
                 <div x-show="error" x-cloak>
-                    <div class="mt-3 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800" x-text="error"></div>
+                    <div class="my-3 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800 flex items-start justify-between gap-3">
+                        <div class="pr-2 break-words" x-text="error"></div>
+                        <button
+                            type="button"
+                            class="shrink-0 text-red-700 hover:text-red-900"
+                            @click="error = null"
+                        >
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
                 </div>
-                <!-- Results grid -->
-                <div class="flex flex-col gap-4 py-4">
-                    <template x-for="(result, idx) in (results?.data || [])" :key="idx">
-                        <div class="bg-white border rounded-lg shadow-sm p-4">
-                            <div class="text-sm text-gray-500 mb-2" x-text="result.id"></div>
-                            <div class="prose prose-sm max-w-none mb-3">
-                                <p x-text="result.text"></p>
+
+                <main class="flex-1 min-h-0 overflow-y-auto pb-32 pe-4 -me-4" x-ref="resultsContainer" x-show="activeTab === 'search'" x-cloak>
+                    <!-- Results grid -->
+                    <div class="flex flex-col gap-4 py-4">
+                        <template x-for="(result, idx) in (results?.data || [])" :key="idx">
+                            <div class="bg-white border rounded-lg shadow-sm p-4">
+                                <div class="text-sm text-gray-500 mb-2" x-text="result.id"></div>
+                                <div class="prose prose-sm max-w-none mb-3">
+                                    <p x-text="result.text"></p>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <template x-for="tag_id in result.tags" :key="tag_id">
+                                        <span
+                                            class="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs text-gray-700"
+                                            x-text="tags?.[tag_id]?.slug"
+                                            x-show="tags?.[tag_id]?.slug"
+                                        ></span>
+                                    </template>
+                                </div>
                             </div>
-                            <div class="flex flex-wrap gap-2">
-                                <template x-for="tag_id in result.tags" :key="tag_id">
-                                    <span
-                                        class="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs text-gray-700"
-                                        x-text="tags?.[tag_id]?.slug"
-                                        x-show="tags?.[tag_id]?.slug"
-                                    ></span>
-                                </template>
+                        </template>
+                    </div>
+                </main>
+                <main class="flex-1 min-h-0 overflow-y-auto pb-32 pe-4 -me-4" x-show="activeTab === 'decisions'" x-cloak></main>
+                <main class="flex-1 min-h-0 overflow-y-auto pb-32 pe-4 -me-4" x-show="activeTab === 'heuristics'" x-cloak>
+                    <div class="py-4">
+                        <div class="mb-8 rounded-xl border border-gray-200 bg-gradient-to-tl from-gray-200 to-gray-100 p-4 shadow-lg text-sm text-gray-700">
+                            <h3 class="text-base font-medium text-gray-900 mb-2">Heuristics Overview</h3>
+                            <p class="mb-2">
+                                Heuristics are simple keyword rules that filter examples and are stored as tags. Two naming conventions for their associated tags are used:
+                            </p>
+                            <ul class="list-disc pl-5 space-y-1 mb-3">
+                                <li>
+                                    <span class="font-mono bg-gray-50 px-1 rounded">h:qs:{querystring}:{label_slug}</span> — querystring-based heuristic
+                                </li>
+                                <li>
+                                    <span class="font-mono bg-gray-50 px-1 rounded">h:fn:{function_name}:{label_slug}</span> — custom function heuristic (registered in <span class="font-mono">custom_heuristics.py</span>)
+                                </li>
+                            </ul>
+                            <p class="mb-2">
+                                Each heuristic can be flagged as a <span class="font-medium">Minimal</span> or <span class="font-medium">Likely</span> condition. We use these flags to guide sampling of training data.
+                            </p>
+                            <div class="mb-2">
+                                <div class="flex h-2 w-full overflow-hidden rounded-full ring-1 ring-gray-200">
+                                    <div class="bg-red-400" :style="`width: ${labelCountPercent('excluded')}%`"></div>
+                                    <div class="bg-amber-400" :style="`width: ${labelCountPercent('neutral')}%`"></div>
+                                    <div class="bg-blue-400" :style="`width: ${labelCountPercent('likely')}%`"></div>
+                                </div>
+                                <div class="mt-2 space-y-1">
+                                    <div>
+                                        <span class="inline-block h-2 w-2 rounded-sm bg-red-400 mr-2 align-middle"></span>
+                                        <span class="align-middle">Excluded (<span x-text="labels?.[activeLabelId]?.num_excluded"></span>) — example does not meet <span class="font-semibold">any</span> Minimal condition.</span>
+                                    </div>
+                                    <div>
+                                        <span class="inline-block h-2 w-2 rounded-sm bg-amber-400 mr-2 align-middle"></span>
+                                        <span class="align-middle">Neutral (<span x-text="labels?.[activeLabelId]?.num_neutral"></span>) — neither explicitly Minimal-excluded nor Likely-matched.</span>
+                                    </div>
+                                    <div>
+                                        <span class="inline-block h-2 w-2 rounded-sm bg-blue-400 mr-2 align-middle"></span>
+                                        <span class="align-middle">Likely (<span x-text="labels?.[activeLabelId]?.num_likely"></span>) — example meets <span class="font-semibold">any</span> Likely condition; good candidates for positive sampling.</span>
+                                    </div>
+                                </div>
                             </div>
+                            <p class="mt-2">
+                                Below are the heuristics for "<span x-text="labels?.[activeLabelId]?.name || ''"></span>".
+                            </p>
                         </div>
-                    </template>
-                </div>
-            </main>
+                        <div x-data="{syncing: false}" class="flex items-center justify-between mb-4">
+                            <h3 class="text-base font-medium text-gray-900" x-text="(labels?.[activeLabelId]?.name || '') + ' Heuristics'"></h3>
+                            <button
+                                type="button"
+                                class="inline-flex items-center justify-center rounded-md bg-gray-800 px-2 py-1 text-white text-xs hover:bg-gray-700"
+                                @click="syncing = true; await syncCustomHeuristics(); syncing = false;"
+                            >
+                                <i class="fa-solid fa-arrows-rotate me-2" :class="syncing ? 'fa-spin' : ''"></i>
+                                <span x-text="syncing ? 'Syncing...' : 'Sync Custom Heuristics'"></span>
+                            </button>
+                        </div>
+                        <template x-if="!(heuristics && Object.keys(heuristics || {}).length)">
+                            <div class="text-sm text-gray-500">No heuristics yet.</div>
+                        </template>
+                        <div class="flex flex-col gap-4">
+                            <template
+                                x-for="h in (Object.values(heuristics || {}).slice().sort((a,b) => new Date(b?.created_at) - new Date(a?.created_at)))"
+                                :key="h.id"
+                            >
+                                <div class="bg-white border rounded-lg shadow-sm p-3">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div class="font-mono text-sm break-all" x-text="h.custom ? ('h:fn:' + h.custom) : (h.querystring ? ('h:qs:' + h.querystring) : '')"></div>
+                                        <div class="text-xs text-gray-700">
+                                            <template x-if="h.applied_at">
+                                                <span>
+                                                    <span x-text="'Applied ' + new Date(h.applied_at).toLocaleString()"></span>
+                                                    <span x-text="'(' + h.num_examples + ')'"></span>
+                                                </span>
+                                            </template>
+                                            <template x-if="!h.applied_at">
+                                                <button
+                                                    type="button"
+                                                    class="inline-flex items-center justify-center rounded-md bg-gray-800 px-2 py-1 text-white text-xs hover:bg-gray-700"
+                                                    @click="applyHeuristic(h.id)"
+                                                >
+                                                    <span x-show="!h.loading">Not Applied</span>
+                                                    <span x-show="h.loading">Applying...</span>
+                                                </button>
+                                            </template>
+                                        </div>
+                                    </div>
+                                    <template x-if="h.custom">
+                                        <pre class="mt-3 rounded-md border border-gray-200 bg-gray-50 p-3 overflow-auto text-xs"><code x-text="h.source || ''"></code></pre>
+                                    </template>
+                                    <div class="mt-3 flex items-center gap-2 justify-between">
+                                        <div class="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                class="rounded-md px-2 py-0.5 text-xs"
+                                                :class="h.is_minimal ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                                @click="h.is_minimal = !h.is_minimal; toggleHeuristicFlag(h.id, 'is_minimal')"
+                                            >Minimal</button>
+                                            <button
+                                                type="button"
+                                                class="rounded-md px-2 py-0.5 text-xs"
+                                                :class="h.is_likely ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                                @click="h.is_likely = !h.is_likely; toggleHeuristicFlag(h.id, 'is_likely')"
+                                            >Likely</button>
+                                        </div>
+                                        <div class="flex items-center" x-data="{ open: false }">
+                                            <template x-if="!open">
+                                                <button
+                                                    type="button"
+                                                    class="rounded-md px-2 py-0.5 text-xs bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                                    @click="open = true"
+                                                >Delete</button>
+                                            </template>
+                                            <template x-if="open">
+                                                <div class="flex items-center gap-2">
+                                                    <span class="text-xs text-gray-700">Are you sure?</span>
+                                                    <button
+                                                        type="button"
+                                                        class="rounded-md px-2 py-0.5 text-xs bg-red-600 text-white hover:bg-red-700"
+                                                        @click="deleteHeuristic(h.id)"
+                                                    >Yes</button>
+                                                    <button
+                                                        type="button"
+                                                        class="rounded-md px-2 py-0.5 text-xs bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                                        @click="open = false"
+                                                    >No</button>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </main>
+                <main class="flex-1 min-h-0 overflow-y-auto pb-32 pe-4 -me-4" x-show="activeTab === 'predictor'" x-cloak></main>
+                <main class="flex-1 min-h-0 overflow-y-auto pb-32 pe-4 -me-4" x-show="activeTab === 'finetunes'" x-cloak></main>
+            </div>
 
             <!-- Right -->
             <aside class="bg-white border rounded-lg shadow-sm my-4 p-4 overflow-hidden">
@@ -276,13 +521,13 @@
                             class="absolute z-10 mt-1 w-56 rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-black/5"
                         >
                             <template
-                                x-for="(label, label_id) in Object.values(labels || {}).sort((a, b) => a.name.localeCompare(b.name))"
-                                :key="label_id"
+                                x-for="(label, idx) in Object.values(labels || {}).sort((a, b) => a.name.localeCompare(b.name))"
+                                :key="label.id"
                             >
                                 <button
                                     type="button"
                                     class="block w-full text-left px-3 py-1.5 hover:bg-gray-50"
-                                    @click="setActiveLabelId(label_id); open = false"
+                                    @click="setActiveLabelId(label.id); open = false"
                                 >
                                     <span x-text="label.name"></span>
                                 </button>
@@ -290,18 +535,20 @@
                         </div>
                     </div>
                 </div>
-                <div class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(tags, null, 2)"></div>
+                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(jobs, null, 2)"></pre>
             </aside>
         </div>
     </div>
 
     <script>
-        function searchComponent(apiUrl) {
+        function searchComponent(apiBase) {
             return {
-                apiUrl,
+                apiBase,
                 labels: null,
                 tags: null,
                 activeLabelId: null,
+                activeTab: 'search',
+                heuristics: null,
                 params: {
                     querystring: '',
                     tags: {
@@ -316,64 +563,222 @@
                 total: null,
                 loading: false,
                 error: null,
+                jobs: {},
                 scrollToTop () {
                     if (this.$refs && this.$refs.resultsContainer) {
                         this.$refs.resultsContainer.scrollTo({ top: 0, behavior: 'smooth' });
                     }
                 },
-                async search({count=false, page=null}={}) {
+                // Helpers
+                createJob(jobName) {
+                    const id = (
+                        'job-' +
+                        Math.random().toString(36).slice(2, 10) +
+                        '-' +
+                        Date.now().toString(36)
+                    );
+                    this.jobs[id] = {
+                        id,
+                        name: jobName || null,
+                        status: 'pending',
+                        error: null,
+                    };
+                    return id;
+                },
+                updateJob(jobId, status, error = null) {
+                    if (!jobId || !this.jobs[jobId]) return;
+                    this.jobs[jobId].status = status;
+                    this.jobs[jobId].error = error;
+                },
+                jobsPending() {
+                    return Object.entries(this.jobs || {}).filter(([_, j]) => j && j.status === 'pending');
+                },
+                jobsErrors() {
+                    return Object.entries(this.jobs || {}).filter(([_, j]) => j && j.error);
+                },
+                dismissJob(jobId) {
+                    if (!jobId || !this.jobs) return;
+                    delete this.jobs[jobId];
+                },
+                async apiFetch(path, { method = 'GET', body = null, jobName = null } = {}) {
+                    let jobId = null;
+
+                    if (jobName) {
+                        jobId = this.createJob(jobName);
+                    }
+
+                    try {
+                        const response = await fetch(`${this.apiBase}${path}`, {
+                            method,
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: body ? JSON.stringify(body) : undefined,
+                        });
+
+                        let data = null;
+                        try {
+                            data = await response.json();
+                        } catch (_) {}
+
+                        if (!response.ok) {
+                            throw new Error(data.error);
+                        }
+
+                        if (jobId) {
+                            this.updateJob(jobId, 'success', null);
+                        }
+                        return data;
+                    } catch (e) {
+                        const msg = String(e);
+                        this.error = msg;
+                        if (jobId) {
+                            this.updateJob(jobId, 'error', msg);
+                        }
+                        return null;
+                    }
+                },
+
+                // Search
+                async search({ count = false, page = null } = {}) {
+                    this.activeTab = 'search';
                     this.loading = true;
-                    this.error = null;
                     if (page !== null) {
                         this.page = page;
                     } else {
                         this.total = null;
                     }
-                    try {
-                        const response = await fetch(this.apiUrl, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify({
-                                params: this.params,
-                                page: this.page,
-                                count: count,
-                            })
-                        });
-                        data = await response.json();
-                        console.log(data);
-                        if (data.error) {
-                            this.error = data.error;
-                            this.results = null;
-                        } else if (count) {
+                    const data = await this.apiFetch('search/', {
+                        method: 'POST',
+                        body: {
+                            params: this.params,
+                            page: this.page,
+                            count: count,
+                        },
+                    });
+                    if (data) {
+                        if (count) {
                             this.total = data.total;
                         } else {
                             this.results = data;
                             this.scrollToTop();
                         }
-                    } catch (e) {
-                        this.error = String(e);
-                        this.results = null;
-                        this.total = null;
-                    } finally {
-                        this.loading = false;
                     }
+                    this.loading = false;
                 },
-                setActiveLabelId(labelId) {
-                    this.activeLabelId = labelId;
+
+                // Labels
+                async getLabels() {
+                    const data = await this.apiFetch('labels/', { method: 'GET' });
+                    if (!data) return;
+                    this.labels = data.labels || {};
                 },
-                init() {
-                    const labels = JSON.parse('{{ labels|safe }}');
-                    this.labels = Object.fromEntries(
-                        Object.entries(labels).map(([key, value]) => [parseInt(key), value])
-                    );
-                    const tags = JSON.parse('{{ tags|safe }}');
-                    this.tags = Object.fromEntries(
-                        Object.entries(tags).map(([key, value]) => [parseInt(key), value])
-                    );
-                    this.activeLabelId = this.labels ? parseInt(Object.keys(this.labels)[0]) : null;
-                    this.search();
+                labelCountPercent(key) {
+                    const label = this.labels?.[this.activeLabelId];
+                    const counts = {
+                        excluded: label?.num_excluded || 0,
+                        neutral: label?.num_neutral || 0,
+                        likely: label?.num_likely || 0,
+                    };
+                    const total = counts.excluded + counts.neutral + counts.likely;
+                    return total ? (counts[key] / total) * 100 : 0;
+                },
+
+                // Tags
+                async getTags() {
+                    const data = await this.apiFetch('tags/', { method: 'GET' });
+                    if (!data) return;
+                    this.tags = data.tags || {};
+                },
+
+                // Heuristics
+                async getHeuristics(labelId = null) {
+                    const lid = labelId ?? this.activeLabelId;
+                    if (!lid) {
+                        this.heuristics = {};
+                        return;
+                    }
+                    const data = await this.apiFetch(`heuristics/${lid}/`, {
+                        method: 'GET',
+                    });
+                    if (!data) return;
+                    this.heuristics = data.heuristics || {};
+                },
+                async syncCustomHeuristics() {
+                    await this.apiFetch('heuristics/sync-custom/', {
+                        method: 'POST',
+                        jobName: 'Syncing Custom Heuristics',
+                    });
+                    await this.getHeuristics();
+                    await this.getTags();
+                    await this.getLabels();
+                },
+                async createHeuristic() {
+                    if (!this.activeLabelId) return;
+                    const querystring = (this.params?.querystring || '').trim();
+                    if (!querystring) return;
+                    const data = await this.apiFetch('heuristic/add/', {
+                        method: 'POST',
+                        body: {
+                            label_id: this.activeLabelId,
+                            querystring: querystring,
+                        },
+                        jobName: 'Creating Heuristic',
+                    });
+                    await this.getHeuristics();
+                    this.activeTab = 'heuristics';
+                },
+                async applyHeuristic(heuristicId) {
+                    if (!heuristicId) return;
+                    if (this.heuristics && this.heuristics[heuristicId]) {
+                        this.heuristics[heuristicId].loading = true;
+                    }
+                    const data = await this.apiFetch('heuristics/apply/', {
+                        method: 'POST',
+                        body: { heuristic_id: heuristicId },
+                        jobName: 'Applying Heuristic',
+                    });
+                    if (this.heuristics && this.heuristics[heuristicId]) {
+                        this.heuristics[heuristicId].loading = false;
+                    }
+                    await this.getHeuristics();
+                    await this.getTags();
+                    await this.getLabels();
+                },
+                async toggleHeuristicFlag(heuristicId, flag) {
+                    if (!heuristicId || !flag) return;
+
+                    const data = await this.apiFetch('heuristics/set-flag/', {
+                        method: 'POST',
+                        body: { heuristic_id: heuristicId, flag },
+                        jobName: 'Updating Heuristic Flag',
+                    });
+                    await this.getHeuristics();
+                    await this.getLabels();
+                },
+                async deleteHeuristic(heuristicId) {
+                    if (!heuristicId) return;
+                    delete this.heuristics[heuristicId];
+                    const data = await this.apiFetch('heuristics/delete/', {
+                        method: 'POST',
+                        body: { heuristic_id: heuristicId },
+                        jobName: 'Deleting Heuristic',
+                    });
+                    await this.getHeuristics();
+                    await this.getTags();
+                    await this.getLabels();
+                },
+
+                // Initialization
+                async setActiveLabelId(labelId) {
+                    this.activeLabelId = Number(labelId);
+                    await this.getHeuristics(labelId);
+                },
+                async init() {
+                    await this.getLabels();
+                    await this.getTags();
+                    await this.setActiveLabelId(Object.values(this.labels)[0]?.id);
+                    await this.search();
                 },
             }
         }

@@ -69,14 +69,17 @@ class SearchQuerySet(CopyQuerySet):
                 or_condition = None
                 for or_part in and_part.split("|"):
                     or_part = or_part.strip()
+                    negated = False
                     if or_part.startswith("~"):
-                        or_part = or_part[1:]
-                        condition = ~Q(text__icontains=or_part.strip())
-                    elif or_part.startswith("^"):
-                        or_part = or_part[1:]
-                        condition = Q(text_prefix__istartswith=or_part.strip())
+                        or_part = or_part[1:].strip()
+                        negated = True
+                    if or_part.startswith("^"):
+                        or_part = or_part[1:].strip()
+                        condition = Q(text_prefix__istartswith=or_part)
                     else:
                         condition = Q(text__icontains=or_part)
+                    if negated:
+                        condition = ~condition
                     if or_condition is None:
                         or_condition = condition
                     else:
@@ -91,13 +94,13 @@ class SearchQuerySet(CopyQuerySet):
     def tags(self, **params):
         params = TagParams(**params).model_dump()
         if params.get("any"):
-            self = self.filter(tags__overlap=params["any"])
+            self = self.filter(example_tags__tags__overlap=params["any"])
         if params.get("all"):
-            self = self.filter(tags__contains=params["all"])
+            self = self.filter(example_tags__tags__contains=params["all"])
         if params.get("not_any"):
-            self = self.exclude(tags__overlap=params["not_any"])
+            self = self.exclude(example_tags__tags__overlap=params["not_any"])
         if params.get("not_all"):
-            self = self.exclude(tags__contains=params["not_all"])
+            self = self.exclude(example_tags__tags__contains=params["not_all"])
         return self
 
     def search(self, **query):
@@ -361,6 +364,9 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
             if cls.objects.exists():
                 start_id = cls.objects.order_by("-id").first().id + 1
             data["id"] = range(start_id, start_id + len(data))
+        data = data.dropna(subset=["text"])
+        data["text"] = data["text"].str.strip()
+        data = data[data["text"].apply(len) > 0]
         data["text_prefix"] = data["text"].apply(lambda x: x[:50])
         data["text_hash"] = data["text"].apply(generate_hash)
         data["shuffle_sort"] = data["text_hash"].apply(
