@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from .classification_run import ClassificationRun
+from .mlm_run import MLMRun
 from .multi_label_classification_run import MultiLabelClassificationRun
 from .pipelines import (
     ClassificationPipeline,
@@ -12,15 +13,19 @@ from .training_run import TrainingRun
 task_registry = [
     ClassificationRun,
     MultiLabelClassificationRun,
+    MLMRun,
 ]
 
 
 def training_run(
-    task: str | None = None, load: Path | str | None = None, *args, **kwargs
+    task: str | None = None,
+    load: Path | str | dict | None = None,
+    *args,
+    **kwargs,
 ) -> TrainingRun:
     """Get a training run instance from the registry."""
     if load is not None:
-        return TrainingRun.from_run_dir(load)
+        return TrainingRun.load(load)
     if task is None:
         raise ValueError("`task` or `load` must be provided.")
     for task_class in task_registry:
