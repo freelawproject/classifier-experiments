@@ -70,8 +70,8 @@ class TrainingRun:
             "task": self.task,
             "run_name": self.run_dir.name,
             "run_dir_parent": str(self.run_dir.parent),
-            "base_model_name": self.base_model_name,
-            "tokenizer_name": self.tokenizer_name,
+            "base_model_name": str(self.base_model_name),
+            "tokenizer_name": str(self.tokenizer_name),
             "tokenize_args": self.tokenize_args,
             "model_args": self.model_args,
             "training_args": self.training_args,
@@ -161,6 +161,8 @@ class TrainingRun:
         train_data: pd.DataFrame,
         eval_data: pd.DataFrame | None = None,
         overwrite: bool = False,
+        resume_from_checkpoint: str | bool | None = None,
+        lazy_tokenize: bool = False,
     ):
         """Run the training run."""
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -169,7 +171,7 @@ class TrainingRun:
         if self.checkpoint_dir.exists():
             if overwrite:
                 shutil.rmtree(self.checkpoint_dir)
-            else:
+            elif not resume_from_checkpoint:
                 raise FileExistsError(
                     f"Checkpoint directory {self.checkpoint_dir} already exists.",
                     "Please delete it or set `overwrite=True` to overwrite it.",
@@ -183,6 +185,10 @@ class TrainingRun:
         # Prepare the datasets
         def prepare_dataset(data: pd.DataFrame) -> Dataset:
             dataset = Dataset.from_pandas(data)
+
+            if lazy_tokenize:
+                return dataset.with_transform(self.tokenize)
+
             dataset = dataset.map(self.tokenize, batched=True)
             dataset = dataset.select_columns(self.dataset_cols)
             dataset.set_format(type="torch")
@@ -199,6 +205,8 @@ class TrainingRun:
             "logging_dir": self.logging_dir,
             "logging_strategy": "steps",
             "logging_steps": 2,
+            "load_best_model_at_end": True,
+            "save_total_limit": 2,
             **self.training_args,
         }
         training_args = TrainingArguments(**training_args)
@@ -219,7 +227,7 @@ class TrainingRun:
         self.config_path.write_text(json.dumps(self.config, indent=4))
 
         # Train the model
-        trainer.train()
+        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
         # Evaluate the model
         if eval_dataset is not None:
@@ -245,11 +253,23 @@ class TrainingRun:
         return self.pipe.predict(*args, **kwargs)
 
     @classmethod
-    def from_run_dir(cls, run_dir: Path | str) -> "TrainingRun":
+    def load(cls, path_or_config: Path | str | dict) -> "TrainingRun":
         """Load a training run from a config."""
         from clx.ml import training_run
 
-        run_dir = Path(run_dir)
-        config = json.loads((run_dir / "config.json").read_text())
+        if isinstance(path_or_config, dict):
+            config = path_or_config
+        else:
+            config_path = Path(path_or_config)
+            if config_path.name != "config.json":
+                config_path = config_path / "config.json"
+            if not config_path.exists():
+                config_path = DEFAULT_RUN_DIR / config_path
+                if not config_path.exists():
+                    raise FileNotFoundError(
+                        f"Training run config {path_or_config} does not exist. "
+                        "Please create it or provide a config."
+                    )
+            config = json.loads(config_path.read_text())
         task = config.pop("task")
         return training_run(task=task, **config)
