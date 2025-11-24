@@ -1,0 +1,487 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="bg-gray-50 text-gray-900" x-data="searchComponent('/api/project/{{ project.id }}/')" x-init="init()">
+
+    <!-- Navbar -->
+    <nav class="h-12 sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-gray-200">
+        <div class="max-w-[1460px] mx-auto h-full px-4 flex items-center justify-between">
+            <div x-data="{ open: false }">
+                <div class="relative">
+                    <button
+                        type="button"
+                        class="font-medium inline-flex items-center gap-2 text-start"
+                        @click="open = !open"
+                        :aria-expanded="open ? 'true' : 'false'"
+                    >
+                        <span class="text-lg font-semibold">{{ project.name }}</span>
+                        <i class="fa-solid fa-chevron-down transition-transform duration-150" :class="open ? 'rotate-180' : ''"></i>
+                    </button>
+                    <div
+                        x-show="open" x-cloak
+                        @click.outside="open = false"
+                        class="absolute z-10 mt-1 w-56 rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-black/5"
+                    >
+                        {% for p in projects %}
+                            <a
+                                href="/project/{{ p.id }}/search/"
+                                class="block w-full text-left px-3 py-1.5 hover:bg-gray-50"
+                            >{{ p.name }}</a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="relative" x-data="{ open: false }" x-show="jobsPending().length" x-cloak>
+                    <button
+                        type="button"
+                        class="text-gray-500 hover:text-gray-700"
+                        @click="open = !open"
+                    >
+                        <i class="fa-solid fa-spinner fa-spin"></i>
+                    </button>
+                    <div
+                        x-show="open" x-cloak
+                        @click.outside="open = false"
+                        class="absolute right-0 mt-1 w-96 max-w-[90vw] rounded-md bg-white py-2 text-sm shadow-lg ring-1 ring-black/5"
+                    >
+                        <template x-for="item in jobsPending()" :key="item[0]">
+                            <div class="px-3 py-2 border-b border-gray-200 last:border-b-0">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="font-medium text-gray-900 truncate" x-text="item[1]?.name || 'Job'"></div>
+                                        <div class="text-xs text-gray-600 flex items-center gap-1">
+                                            <i class="fa-solid fa-spinner fa-spin text-gray-400 me-2"></i>
+                                            <span>In progress…</span>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class="text-gray-500 hover:text-gray-700 shrink-0"
+                                        @click="dismissJob(item[0]); if (jobsPending().length === 0) open = false;"
+                                    >
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+                <div class="relative" x-data="{ open: false }" x-show="jobsErrors().length" x-cloak>
+                    <button
+                        type="button"
+                        class="text-red-500 hover:text-red-600"
+                        @click="open = !open"
+                    >
+                        <i class="fa-solid fa-circle-exclamation"></i>
+                    </button>
+                    <div
+                        x-show="open" x-cloak
+                        @click.outside="open = false"
+                        class="absolute right-0 mt-1 w-96 max-w-[90vw] rounded-md bg-white py-2 text-sm shadow-lg ring-1 ring-black/5"
+                    >
+                        <template x-for="item in jobsErrors()" :key="item[0]">
+                            <div class="px-3 py-2 border-b border-gray-200 last:border-b-0">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="font-medium text-gray-900 truncate" x-text="item[1]?.name || 'Job'"></div>
+                                        <div class="text-xs text-red-700 break-words whitespace-pre-wrap" x-text="String(item[1]?.error || '')"></div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        class="text-gray-500 hover:text-gray-700 shrink-0"
+                                        @click="dismissJob(item[0]);"
+                                    >
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Search -->
+    <div class="max-w-[1460px] mx-auto px-4">
+        <div class="grid grid-cols-[18rem_minmax(0,1fr)_18rem] gap-4 h-[calc(100vh-3rem)]">
+            {% include "search/search_panel.html" %}
+
+            <!-- Main Tabs -->
+            <div class="flex flex-col min-h-0">
+                <div class="bg-white border rounded-lg shadow-sm my-4 overflow-hidden">
+                    <nav
+                        class="grid grid-cols-5 w-full divide-x divide-gray-200"
+                        x-data="{ tabs: [
+                            { key: 'search', label: 'Search' },
+                            { key: 'decisions', label: 'Decisions' },
+                            { key: 'heuristics', label: 'Heuristics' },
+                            { key: 'predictor', label: 'Predictor' },
+                            { key: 'finetunes', label: 'Finetunes' },
+                        ] }"
+                    >
+                        <template x-for="t in tabs" :key="t.key">
+                            <button
+                                type="button"
+                                role="tab"
+                                @click="activeTab = t.key"
+                                :aria-selected="activeTab === t.key"
+                                class="px-4 py-2 text-sm text-center transition"
+                                :class="activeTab === t.key ? 'bg-gray-100 text-gray-900' : 'bg-white text-gray-700 hover:bg-gray-50'"
+                                x-text="t.label"
+                            ></button>
+                        </template>
+                    </nav>
+                </div>
+
+                <!-- Error box -->
+                <div x-show="error" x-cloak>
+                    <div class="my-3 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800 flex items-start justify-between gap-3">
+                        <div class="pr-2 break-words" x-text="error"></div>
+                        <button
+                            type="button"
+                            class="shrink-0 text-red-700 hover:text-red-900"
+                            @click="error = null"
+                        >
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
+                {% include "search/results_tab.html" %}
+                {% include "search/decisions_tab.html" %}
+                {% include "search/heuristics_tab.html" %}
+                <main class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4" x-show="activeTab === 'predictor'" x-cloak></main>
+                <main class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4" x-show="activeTab === 'finetunes'" x-cloak></main>
+            </div>
+
+            <!-- Right -->
+            <aside class="bg-white border rounded-lg shadow-sm my-4 p-4 overflow-hidden">
+                <div class="mb-3" x-data="{ open: false }">
+                    <div class="relative">
+                        <button
+                            type="button"
+                            class="font-medium inline-flex items-center gap-2 text-start"
+                            @click="open = !open"
+                            :aria-expanded="open ? 'true' : 'false'"
+                        >
+                            <span x-text="labels?.[activeLabelId]?.name || 'Labels'"></span>
+                            <i class="fa-solid fa-chevron-down transition-transform duration-150" :class="open ? 'rotate-180' : ''"></i>
+                        </button>
+                        <div
+                            x-show="open" x-cloak
+                            @click.outside="open = false"
+                            class="absolute z-10 mt-1 w-56 rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-black/5"
+                        >
+                            <template
+                                x-for="(label, idx) in Object.values(labels || {}).sort((a, b) => a.name.localeCompare(b.name))"
+                                :key="label.id"
+                            >
+                                <button
+                                    type="button"
+                                    class="block w-full text-left px-3 py-1.5 hover:bg-gray-50"
+                                    @click="setActiveLabelId(label.id); open = false"
+                                >
+                                    <span x-text="label.name"></span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(jobs, null, 2)"></pre>
+            </aside>
+        </div>
+    </div>
+
+    <script>
+        function searchComponent(apiBase) {
+            return {
+                apiBase,
+                labels: null,
+                tags: null,
+                activeLabelId: null,
+                activeTab: 'search',
+                heuristics: null,
+                decisions: null,
+                params: {
+                    querystring: '',
+                    tags: {
+                        any: [],
+                        all: [],
+                        not_any: [],
+                        not_all: [],
+                    },
+                },
+                page: 1,
+                results: null,
+                total: null,
+                loading: false,
+                error: null,
+                jobs: {},
+                scrollToTop () {
+                    if (this.$refs && this.$refs.resultsContainer) {
+                        this.$refs.resultsContainer.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
+                },
+                // Helpers
+                createJob(jobName) {
+                    const id = (
+                        'job-' +
+                        Math.random().toString(36).slice(2, 10) +
+                        '-' +
+                        Date.now().toString(36)
+                    );
+                    this.jobs[id] = {
+                        id,
+                        name: jobName || null,
+                        status: 'pending',
+                        error: null,
+                    };
+                    return id;
+                },
+                updateJob(jobId, status, error = null) {
+                    if (!jobId || !this.jobs[jobId]) return;
+                    this.jobs[jobId].status = status;
+                    this.jobs[jobId].error = error;
+                },
+                jobsPending() {
+                    return Object.entries(this.jobs || {}).filter(([_, j]) => j && j.status === 'pending');
+                },
+                jobsErrors() {
+                    return Object.entries(this.jobs || {}).filter(([_, j]) => j && j.error);
+                },
+                dismissJob(jobId) {
+                    if (!jobId || !this.jobs) return;
+                    delete this.jobs[jobId];
+                },
+
+                // Decision helpers
+                decisionForTextHash(textHash) {
+                    if (!textHash || !this.decisions) return null;
+                    const items = Object.values(this.decisions || {});
+                    return items.find(d => d && d.text_hash === textHash) || null;
+                },
+                goToDecisionByHash(textHash) {
+                    if (!textHash) return;
+                    this.activeTab = 'decisions';
+                    this.$nextTick(() => {
+                        const el = document.getElementById('decision-' + textHash);
+                        if (el && typeof el.scrollIntoView === 'function') {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            el.classList.add('ring-2', 'ring-blue-500');
+                            setTimeout(() => el.classList.remove('ring-2', 'ring-blue-500'), 1500);
+                        }
+                    });
+                },
+
+                // API
+                async apiFetch(path, { method = 'GET', body = null, jobName = null } = {}) {
+                    let jobId = null;
+
+                    if (jobName) {
+                        jobId = this.createJob(jobName);
+                    }
+
+                    try {
+                        const response = await fetch(`${this.apiBase}${path}`, {
+                            method,
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: body ? JSON.stringify(body) : undefined,
+                        });
+
+                        let data = null;
+                        try {
+                            data = await response.json();
+                        } catch (_) {}
+
+                        if (!response.ok) {
+                            throw new Error(data.error);
+                        }
+
+                        if (jobId) {
+                            this.updateJob(jobId, 'success', null);
+                        }
+                        return data;
+                    } catch (e) {
+                        const msg = String(e);
+                        this.error = msg;
+                        if (jobId) {
+                            this.updateJob(jobId, 'error', msg);
+                        }
+                        return null;
+                    }
+                },
+
+                // Search
+                async search({ count = false, page = null } = {}) {
+                    this.activeTab = 'search';
+                    this.loading = true;
+                    if (page !== null) {
+                        this.page = page;
+                    } else {
+                        this.total = null;
+                    }
+                    const data = await this.apiFetch('search/', {
+                        method: 'POST',
+                        body: {
+                            params: this.params,
+                            page: this.page,
+                            count: count,
+                        },
+                    });
+                    if (data) {
+                        if (count) {
+                            this.total = data.total;
+                        } else {
+                            this.results = data;
+                            this.scrollToTop();
+                        }
+                    }
+                    this.loading = false;
+                },
+
+                // Labels
+                async getLabels() {
+                    const data = await this.apiFetch('labels/', { method: 'GET' });
+                    if (!data) return;
+                    this.labels = data.labels || {};
+                },
+                labelCountPercent(key) {
+                    const label = this.labels?.[this.activeLabelId];
+                    const counts = {
+                        excluded: label?.num_excluded || 0,
+                        neutral: label?.num_neutral || 0,
+                        likely: label?.num_likely || 0,
+                    };
+                    const total = counts.excluded + counts.neutral + counts.likely;
+                    return total ? (counts[key] / total) * 100 : 0;
+                },
+
+                // Tags
+                async getTags() {
+                    const data = await this.apiFetch('tags/', { method: 'GET' });
+                    if (!data) return;
+                    this.tags = data.tags || {};
+                },
+
+                // Decisions
+                async getDecisions(labelId = null) {
+                    const lid = labelId ?? this.activeLabelId;
+                    if (!lid) return;
+                    const data = await this.apiFetch('decisions/', { method: 'POST', body: { label_id: lid } });
+                    if (!data) return;
+                    this.decisions = data.decisions || {};
+                },
+                async updateDecision(labelId, textHash, value, reason) {
+                    await this.apiFetch('decision/update/', {
+                        method: 'POST',
+                        body: { text_hash: textHash, label_id: labelId, value: value, reason: reason},
+                        jobName: 'Updating Decision',
+                    });
+                    const decision = await this.getDecisions(this.activeLabelId);
+                    if (!decision) return;
+                    this.decisions[decision.id] = decision;
+                },
+                async deleteDecision(decisionId) {
+                    if (!decisionId) return;
+                    delete this.decisions[decisionId];
+                    const data = await this.apiFetch('decision/delete/', {
+                        method: 'POST',
+                        body: { decision_id: decisionId },
+                        jobName: 'Deleting Decision',
+                    });
+                    await this.getDecisions();
+                },
+
+                // Heuristics
+                async getHeuristics(labelId = null) {
+                    const lid = labelId ?? this.activeLabelId;
+                    if (!lid) return;
+                    const data = await this.apiFetch('heuristics/', { method: 'POST', body: { label_id: lid } });
+                    if (!data) return;
+                    this.heuristics = data.heuristics || {};
+                },
+                async syncCustomHeuristics() {
+                    await this.apiFetch('heuristics/sync-custom/', {
+                        method: 'POST',
+                        jobName: 'Syncing Custom Heuristics',
+                    });
+                    await this.getHeuristics();
+                    await this.getTags();
+                    await this.getLabels();
+                },
+                async createHeuristic() {
+                    if (!this.activeLabelId) return;
+                    const querystring = (this.params?.querystring || '').trim();
+                    if (!querystring) return;
+                    const data = await this.apiFetch('heuristic/add/', {
+                        method: 'POST',
+                        body: {
+                            label_id: this.activeLabelId,
+                            querystring: querystring,
+                        },
+                        jobName: 'Creating Heuristic',
+                    });
+                    await this.getHeuristics();
+                    this.activeTab = 'heuristics';
+                },
+                async applyHeuristic(heuristicId) {
+                    if (!heuristicId) return;
+                    if (this.heuristics && this.heuristics[heuristicId]) {
+                        this.heuristics[heuristicId].loading = true;
+                    }
+                    const data = await this.apiFetch('heuristics/apply/', {
+                        method: 'POST',
+                        body: { heuristic_id: heuristicId },
+                        jobName: 'Applying Heuristic',
+                    });
+                    if (this.heuristics && this.heuristics[heuristicId]) {
+                        this.heuristics[heuristicId].loading = false;
+                    }
+                    await this.getHeuristics();
+                    await this.getTags();
+                    await this.getLabels();
+                },
+                async toggleHeuristicFlag(heuristicId, flag) {
+                    if (!heuristicId || !flag) return;
+
+                    const data = await this.apiFetch('heuristics/set-flag/', {
+                        method: 'POST',
+                        body: { heuristic_id: heuristicId, flag },
+                        jobName: 'Updating Heuristic Flag',
+                    });
+                    await this.getHeuristics();
+                    await this.getLabels();
+                },
+                async deleteHeuristic(heuristicId) {
+                    if (!heuristicId) return;
+                    delete this.heuristics[heuristicId];
+                    const data = await this.apiFetch('heuristics/delete/', {
+                        method: 'POST',
+                        body: { heuristic_id: heuristicId },
+                        jobName: 'Deleting Heuristic',
+                    });
+                    await this.getHeuristics();
+                    await this.getTags();
+                    await this.getLabels();
+                },
+
+                // Initialization
+                async setActiveLabelId(labelId) {
+                    this.activeLabelId = Number(labelId);
+                    await this.getHeuristics(labelId);
+                    await this.getDecisions(labelId);
+                },
+                async init() {
+                    await this.getLabels();
+                    await this.getTags();
+                    await this.setActiveLabelId(Object.values(this.labels)[0]?.id);
+                    await this.search();
+                },
+            }
+        }
+    </script>
+</div>
+{% endblock %}
