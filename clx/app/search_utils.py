@@ -130,7 +130,7 @@ class SearchQuerySet(CopyQuerySet):
         self = self.order_by(*query["sort"])
 
         # Select columns
-        cols = ["id", "text", "tags"]
+        cols = ["id", "text_hash", "text", "tags"]
         self = self.values(*cols)
 
         # Apply pagination
