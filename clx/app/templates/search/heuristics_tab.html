@@ -1,0 +1,132 @@
+<main class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4" x-show="activeTab === 'heuristics'" x-cloak>
+    <div class="py-4">
+        <div class="mb-8 rounded-xl border border-gray-200 bg-gradient-to-tl from-gray-200 to-gray-100 p-4 shadow-lg text-sm text-gray-700">
+            <h3 class="text-base font-medium text-gray-900 mb-2">Heuristics Overview</h3>
+            <p class="mb-2">
+                Heuristics are simple keyword rules that filter examples and are stored as tags. Two naming conventions for their associated tags are used:
+            </p>
+            <ul class="list-disc pl-5 space-y-1 mb-3">
+                <li>
+                    <span class="font-mono bg-gray-50 px-1 rounded">h:qs:{querystring}:{label_slug}</span> — querystring-based heuristic
+                </li>
+                <li>
+                    <span class="font-mono bg-gray-50 px-1 rounded">h:fn:{function_name}:{label_slug}</span> — custom function heuristic (registered in <span class="font-mono">custom_heuristics.py</span>)
+                </li>
+            </ul>
+            <p class="mb-2">
+                Each heuristic can be flagged as a <span class="font-medium">Minimal</span> or <span class="font-medium">Likely</span> condition. We use these flags to guide sampling of training data.
+            </p>
+            <div class="mb-2">
+                <div class="flex h-2 w-full overflow-hidden rounded-full ring-1 ring-gray-200">
+                    <div class="bg-red-400" :style="`width: ${labelCountPercent('excluded')}%`"></div>
+                    <div class="bg-amber-400" :style="`width: ${labelCountPercent('neutral')}%`"></div>
+                    <div class="bg-blue-400" :style="`width: ${labelCountPercent('likely')}%`"></div>
+                </div>
+                <div class="mt-2 space-y-1">
+                    <div>
+                        <span class="inline-block h-2 w-2 rounded-sm bg-red-400 mr-2 align-middle"></span>
+                        <span class="align-middle">Excluded (<span x-text="labels?.[activeLabelId]?.num_excluded"></span>) — example does not meet <span class="font-semibold">any</span> Minimal condition.</span>
+                    </div>
+                    <div>
+                        <span class="inline-block h-2 w-2 rounded-sm bg-amber-400 mr-2 align-middle"></span>
+                        <span class="align-middle">Neutral (<span x-text="labels?.[activeLabelId]?.num_neutral"></span>) — neither explicitly Minimal-excluded nor Likely-matched.</span>
+                    </div>
+                    <div>
+                        <span class="inline-block h-2 w-2 rounded-sm bg-blue-400 mr-2 align-middle"></span>
+                        <span class="align-middle">Likely (<span x-text="labels?.[activeLabelId]?.num_likely"></span>) — example meets <span class="font-semibold">any</span> Likely condition; good candidates for positive sampling.</span>
+                    </div>
+                </div>
+            </div>
+            <p class="mt-2">
+                Below are the heuristics for "<span x-text="labels?.[activeLabelId]?.name || ''"></span>".
+            </p>
+        </div>
+        <div x-data="{syncing: false}" class="flex items-center justify-between mb-4">
+            <h3 class="text-base font-medium text-gray-900" x-text="(labels?.[activeLabelId]?.name || '') + ' Heuristics'"></h3>
+            <button
+                type="button"
+                class="inline-flex items-center justify-center rounded-md bg-gray-800 px-2 py-1 text-white text-xs hover:bg-gray-700"
+                @click="syncing = true; await syncCustomHeuristics(); syncing = false;"
+            >
+                <i class="fa-solid fa-arrows-rotate me-2" :class="syncing ? 'fa-spin' : ''"></i>
+                <span x-text="syncing ? 'Syncing...' : 'Sync Custom Heuristics'"></span>
+            </button>
+        </div>
+        <template x-if="!(heuristics && Object.keys(heuristics || {}).length)">
+            <div class="text-sm text-gray-500">No heuristics yet.</div>
+        </template>
+        <div class="flex flex-col gap-4">
+            <template
+                x-for="h in (Object.values(heuristics || {}).slice().sort((a,b) => new Date(b?.created_at) - new Date(a?.created_at)))"
+                :key="h.id"
+            >
+                <div class="bg-white border rounded-lg shadow-sm p-3">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="font-mono text-sm break-all" x-text="h.custom ? ('h:fn:' + h.custom) : (h.querystring ? ('h:qs:' + h.querystring) : '')"></div>
+                        <div class="text-xs text-gray-700">
+                            <template x-if="h.applied_at">
+                                <span>
+                                    <span x-text="'Applied ' + new Date(h.applied_at).toLocaleString()"></span>
+                                    <span x-text="'(' + h.num_examples + ')'"></span>
+                                </span>
+                            </template>
+                            <template x-if="!h.applied_at">
+                                <button
+                                    type="button"
+                                    class="inline-flex items-center justify-center rounded-md bg-gray-800 px-2 py-1 text-white text-xs hover:bg-gray-700"
+                                    @click="applyHeuristic(h.id)"
+                                >
+                                    <span x-show="!h.loading">Not Applied</span>
+                                    <span x-show="h.loading">Applying...</span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+                    <template x-if="h.custom">
+                        <pre class="mt-3 rounded-md border border-gray-200 bg-gray-50 p-3 overflow-auto text-xs"><code x-text="h.source || ''"></code></pre>
+                    </template>
+                    <div class="mt-3 flex items-center gap-2 justify-between">
+                        <div class="flex items-center gap-2">
+                            <button
+                                type="button"
+                                class="rounded-md px-2 py-0.5 text-xs"
+                                :class="h.is_minimal ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                @click="h.is_minimal = !h.is_minimal; toggleHeuristicFlag(h.id, 'is_minimal')"
+                            >Minimal</button>
+                            <button
+                                type="button"
+                                class="rounded-md px-2 py-0.5 text-xs"
+                                :class="h.is_likely ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                @click="h.is_likely = !h.is_likely; toggleHeuristicFlag(h.id, 'is_likely')"
+                            >Likely</button>
+                        </div>
+                        <div class="flex items-center" x-data="{ open: false }">
+                            <template x-if="!open">
+                                <button
+                                    type="button"
+                                    class="rounded-md px-2 py-0.5 text-xs bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                    @click="open = true"
+                                >Delete</button>
+                            </template>
+                            <template x-if="open">
+                                <div class="flex items-center gap-2" @click.outside="open = false">
+                                    <span class="text-xs text-gray-700">Are you sure?</span>
+                                    <button
+                                        type="button"
+                                        class="rounded-md px-2 py-0.5 text-xs bg-red-500 text-white hover:bg-red-600"
+                                        @click="deleteHeuristic(h.id)"
+                                    >Yes</button>
+                                    <button
+                                        type="button"
+                                        class="rounded-md px-2 py-0.5 text-xs bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                        @click="open = false"
+                                    >No</button>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+</main>

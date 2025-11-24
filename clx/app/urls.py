@@ -23,7 +23,22 @@ urlpatterns = [
         name="tags-endpoint",
     ),
     path(
-        "api/project/<slug:project_id>/heuristics/<int:label_id>/",
+        "api/project/<slug:project_id>/decisions/",
+        views.decisions_endpoint,
+        name="decisions-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/decision/update/",
+        views.decision_update_endpoint,
+        name="decision-update-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/decision/delete/",
+        views.decision_delete_endpoint,
+        name="decision-delete-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/heuristics/",
         views.heuristics_endpoint,
         name="heuristics-endpoint",
     ),

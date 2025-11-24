@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from .custom_heuristics import custom_heuristics
-from .models import Label, LabelHeuristic, LabelTag, Project
+from .models import Label, LabelDecision, LabelHeuristic, LabelTag, Project
 
 
 # Endpoints
@@ -41,9 +41,82 @@ def tags_endpoint(request, project_id):
     return JsonResponse({"tags": tags})
 
 
+# Decision Endpoints
+@csrf_exempt
+@require_POST
+def decisions_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
+    decisions = LabelDecision.objects.filter(label_id=label_id).values(
+        "id",
+        "label_id",
+        "value",
+        "reason",
+        "text_hash",
+        "text",
+    )
+    decisions = {d["id"]: d for d in decisions}
+    return JsonResponse({"decisions": decisions})
+
+
+@csrf_exempt
+@require_POST
+def decision_update_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    text_hash = payload.get("text_hash")
+    value = payload.get("value")
+    reason = payload.get("reason")
+    print(label_id, text_hash, value, reason)
+    assert label_id and isinstance(value, bool) and reason, (
+        "label_id, value and reason are required"
+    )
+    label = Label.objects.get(id=label_id)
+    decision, _ = LabelDecision.objects.get_or_create(
+        label_id=label.id,
+        text_hash=text_hash,
+        defaults={"value": value, "reason": reason},
+    )
+    if decision.text is None:
+        decision.text = (
+            label.project.get_search_model()
+            .objects.get(text_hash=text_hash)
+            .text
+        )
+    decision.value = value
+    decision.reason = reason
+    decision.save()
+    data = {
+        "id": decision.id,
+        "label_id": decision.label_id,
+        "text_hash": decision.text_hash,
+        "value": decision.value,
+        "reason": decision.reason,
+        "text": decision.text,
+    }
+    return JsonResponse({"decision": data})
+
+
+@csrf_exempt
+@require_POST
+def decision_delete_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    decision_id = payload.get("decision_id")
+    if not decision_id:
+        return JsonResponse({"error": "decision_id is required"}, status=400)
+    decision = LabelDecision.objects.get(id=decision_id)
+    decision.delete()
+    return JsonResponse({"ok": True})
+
+
 ## Heuristic Endpoints
-@require_GET
-def heuristics_endpoint(request, project_id, label_id):
+@csrf_exempt
+@require_POST
+def heuristics_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
     heuristics = list(
         LabelHeuristic.objects.filter(label_id=label_id).values(
             "id",
@@ -139,7 +212,7 @@ def search_view(request, project_id):
     project = Project.objects.get(id=project_id)
     return render(
         request,
-        "search.html",
+        "search/index.html",
         {
             "project": project,
             "projects": Project.objects.all().order_by("name"),

@@ -1,0 +1,74 @@
+<main class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4" x-ref="resultsContainer" x-show="activeTab === 'search'" x-cloak>
+    <div class="flex flex-col gap-4 py-4">
+        <template x-for="(result, idx) in (results?.data || [])" :key="idx">
+            <div class="bg-white border rounded-lg shadow-sm p-4" x-data="{ showAddDecision: false, addReason: '', addValue: true }">
+                <div class="flex items-start justify-between mb-2">
+                    <div class="text-sm text-gray-500" x-text="result.id"></div>
+                    <div class="flex items-center gap-2">
+                        <button
+                            type="button"
+                            class="rounded-md px-2 py-0.5 text-xs bg-gray-100 text-gray-700 hover:bg-gray-200"
+                            x-show="!decisionForTextHash(result.text_hash);"
+                            @click="showAddDecision = true"
+                        >Decision</button>
+                        <button
+                            type="button"
+                            class="rounded-md px-2 py-0.5 text-xs bg-gray-900 text-white hover:bg-gray-800"
+                            x-show="decisionForTextHash(result.text_hash);"
+                            @click="goToDecisionByHash(result.text_hash)"
+                        >Decision</button>
+                    </div>
+                </div>
+                <!-- Add decision form -->
+                <div class="my-3" x-show="showAddDecision" @click.outside="showAddDecision = false" x-cloak>
+                    <div class="grid grid-cols-1 md:grid-cols-[1fr_12rem] gap-3 items-stretch">
+                        <textarea
+                            class="w-full rounded-md ring-1 ring-gray-300 focus:ring-blue-500 text-sm p-2"
+                            rows="2"
+                            x-model="addReason"
+                            placeholder="Enter reason…"
+                        ></textarea>
+                        <div class="flex flex-col gap-2 justify-between">
+                            <div class="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    class="rounded-md w-full px-2 py-0.5 text-xs"
+                                    :class="addValue ? 'bg-green-500 text-white hover:bg-green-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                    @click="addValue = true"
+                                >Positive</button>
+                                <button
+                                    type="button"
+                                    class="rounded-md w-full px-2 py-0.5 text-xs"
+                                    :class="!addValue ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                    @click="addValue = false"
+                                >Negative</button>
+                            </div>
+                            <div class="flex w-full">
+                                <button
+                                    type="button"
+                                    class="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-2 py-1 text-white text-xs hover:bg-blue-700 disabled:opacity-50"
+                                    :disabled="!activeLabelId || !(addReason && addReason.trim())"
+                                    @click="showAddDecision = false; await updateDecision(activeLabelId, result.text_hash, addValue, addReason); addReason = ''; addValue = true;"
+                                >
+                                    Submit Decision
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="prose prose-sm max-w-none mb-3">
+                    <p x-text="result.text"></p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <template x-for="tag_id in result.tags" :key="tag_id">
+                        <span
+                            class="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs text-gray-700"
+                            x-text="tags?.[tag_id]?.slug"
+                            x-show="tags?.[tag_id]?.slug"
+                        ></span>
+                    </template>
+                </div>
+            </div>
+        </template>
+    </div>
+</main>
