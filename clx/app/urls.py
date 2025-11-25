@@ -8,6 +8,11 @@ urlpatterns = [
         "project/<slug:project_id>/search/", views.search_view, name="search"
     ),
     path(
+        "api/project/<slug:project_id>/project/",
+        views.project_endpoint,
+        name="project",
+    ),
+    path(
         "api/project/<slug:project_id>/search/",
         views.search_endpoint,
         name="search-endpoint",

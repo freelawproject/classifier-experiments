@@ -2,7 +2,6 @@
 
 {% block content %}
 <div class="bg-gray-50 text-gray-900" x-data="searchComponent('/api/project/{{ project.id }}/')" x-init="init()">
-
     <!-- Navbar -->
     <nav class="h-12 sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-gray-200">
         <div class="max-w-[1460px] mx-auto h-full px-4 flex items-center justify-between">
@@ -188,6 +187,8 @@
                         </div>
                     </div>
                 </div>
+                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(project, null, 2)"></pre>
+                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(labels[activeLabelId], null, 2)"></pre>
                 <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(jobs, null, 2)"></pre>
             </aside>
         </div>
@@ -197,6 +198,7 @@
         function searchComponent(apiBase) {
             return {
                 apiBase,
+                project: null,
                 labels: null,
                 tags: null,
                 activeLabelId: null,
@@ -342,6 +344,13 @@
                     this.loading = false;
                 },
 
+                // Project
+                async getProject() {
+                    const data = await this.apiFetch('project/', { method: 'GET' })
+                    if (!data) return;
+                    this.project = data.project || {};
+                },
+
                 // Labels
                 async getLabels() {
                     const data = await this.apiFetch('labels/', { method: 'GET' });
@@ -475,6 +484,7 @@
                     await this.getDecisions(labelId);
                 },
                 async init() {
+                    await this.getProject();
                     await this.getLabels();
                     await this.getTags();
                     await this.setActiveLabelId(Object.values(this.labels)[0]?.id);

@@ -21,16 +21,46 @@ def search_endpoint(request, project_id):
     return JsonResponse(model.objects.search(**payload))
 
 
+# Project Endpoints
+@require_GET
+def project_endpoint(request, project_id):
+    project = Project.objects.get(id=project_id)
+    print(project)
+    return JsonResponse(
+        {
+            "project": {
+                "id": project.id,
+                "name": project.name,
+                "instructions": project.instructions or "",
+            }
+        }
+    )
+
+
+# Labels Endpoints
 @require_GET
 def labels_endpoint(request, project_id):
     project = Project.objects.get(id=project_id)
     labels_qs = Label.objects.filter(project=project).values(
-        "id", "name", "num_excluded", "num_neutral", "num_likely"
+        "id",
+        "name",
+        "num_excluded",
+        "num_neutral",
+        "num_likely",
+        "instructions",
+        "inference_model",
+        "teacher_model",
+        "predictor_data",
+        "predictor_updated_at",
+        "trainset_sample_per_heuristic_bucket",
+        "trainset_num_positive_preds",
+        "trainset_num_negative_preds",
     )
     labels = {row["id"]: row for row in labels_qs}
     return JsonResponse({"labels": labels})
 
 
+# Tags Endpoints
 @require_GET
 def tags_endpoint(request, project_id):
     project = Project.objects.get(id=project_id)
