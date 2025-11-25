@@ -64,6 +64,7 @@ class Label(BaseModel):
 
     # Trainset config
     trainset_sample_per_heuristic_bucket = models.IntegerField(default=1000)
+    trainset_updated_at = models.DateTimeField(null=True, blank=True)
     trainset_num_positive_preds = models.IntegerField(default=0)
     trainset_num_negative_preds = models.IntegerField(default=0)
 
@@ -105,6 +106,68 @@ class Label(BaseModel):
         self.num_excluded = self.excluded_query().count()
         self.num_likely = self.likely_query().count()
         self.num_neutral = self.neutral_query().count()
+        self.save()
+
+    @property
+    def trainset_train_tag(self):
+        """Tag for training examples in the trainset."""
+        tag, _ = LabelTag.objects.get_or_create(
+            label=self, name="trainset:train"
+        )
+        return tag
+
+    @property
+    def trainset_eval_tag(self):
+        """Tag for eval examples in the trainset."""
+        tag, _ = LabelTag.objects.get_or_create(
+            label=self, name="trainset:eval"
+        )
+        return tag
+
+    @property
+    def trainset_pred_tag(self):
+        """Tag for positive predictions in the trainset."""
+        tag, _ = LabelTag.objects.get_or_create(
+            label=self, name="trainset:pred"
+        )
+        return tag
+
+    def sample_trainset(self, ratio=1):
+        """Sample trainset examples."""
+        data = []
+        excluded_examples = self.excluded_query().order_by("?").values("id")
+        data += list(
+            excluded_examples[
+                : int(self.trainset_sample_per_heuristic_bucket * ratio)
+            ]
+        )
+        neutral_examples = self.neutral_query().order_by("?").values("id")
+        data += list(
+            neutral_examples[
+                : int(self.trainset_sample_per_heuristic_bucket * ratio)
+            ]
+        )
+        likely_examples = self.likely_query().order_by("?").values("id")
+        data += list(
+            likely_examples[
+                : int(self.trainset_sample_per_heuristic_bucket * ratio)
+            ]
+        )
+        data = pd.DataFrame(data).drop_duplicates(subset="id").sample(frac=1)
+        return data
+
+    def update_trainset(self):
+        model = self.project.get_search_model()
+
+        trainset_train = self.sample_trainset(ratio=1)
+        train_tag = self.trainset_train_tag
+        model.bulk_replace_tag(train_tag.id, trainset_train["id"].tolist())
+
+        trainset_eval = self.sample_trainset(ratio=0.2)
+        eval_tag = self.trainset_eval_tag
+        model.bulk_replace_tag(eval_tag.id, trainset_eval["id"].tolist())
+
+        self.trainset_updated_at = timezone.now()
         self.save()
 
     def get_new_predictor(self):
