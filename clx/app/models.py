@@ -1,9 +1,10 @@
 import pandas as pd
 from django.apps import apps
 from django.db import models
-from django.db.models import JSONField, Max
+from django.db.models import JSONField
 from django.utils import timezone
 
+from clx.llm import SingleLabelPredictor
 from clx.settings import CACHED_DATASET_DIR
 
 from .custom_heuristics import custom_heuristics
@@ -33,11 +34,38 @@ class Label(BaseModel):
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
-    instructions = models.TextField(null=True, blank=True)
+
+    # Sample counts
     num_excluded = models.IntegerField(default=0)
     num_neutral = models.IntegerField(default=0)
     num_likely = models.IntegerField(default=0)
-    needs_predictor_update = models.BooleanField(default=True)
+
+    # Predictor config
+    llm_models = [
+        ("Qwen 235B-A22B", "bedrock/qwen.qwen3-235b-a22b-2507-v1:0"),
+        (
+            "Claude Sonnet 4.5",
+            "bedrock/us-west-2.claude-sonnet-4-5-20250929-v1:0",
+        ),
+    ]
+    instructions = models.TextField(null=True, blank=True)
+    inference_model = models.CharField(
+        max_length=255,
+        choices=llm_models,
+        default="bedrock/qwen.qwen3-235b-a22b-2507-v1:0",
+    )
+    teacher_model = models.CharField(
+        max_length=255,
+        choices=llm_models,
+        default="bedrock/us-west-2.claude-sonnet-4-5-20250929-v1:0",
+    )
+    predictor_data = JSONField(null=True, blank=True)
+    predictor_updated_at = models.DateTimeField(null=True, blank=True)
+
+    # Trainset config
+    trainset_sample_per_heuristic_bucket = models.IntegerField(default=1000)
+    trainset_num_positive_preds = models.IntegerField(default=0)
+    trainset_num_negative_preds = models.IntegerField(default=0)
 
     def excluded_query(self):
         tags = LabelTag.objects.filter(label=self, heuristic__is_minimal=True)
@@ -77,6 +105,28 @@ class Label(BaseModel):
         self.num_excluded = self.excluded_query().count()
         self.num_likely = self.likely_query().count()
         self.num_neutral = self.neutral_query().count()
+        self.save()
+
+    def get_new_predictor(self):
+        return SingleLabelPredictor(
+            label_name=self.name,
+            project_instructions=self.project.instructions,
+            label_instructions=self.instructions,
+        )
+
+    @property
+    def predictor(self):
+        if self.predictor_data is None:
+            return self.get_new_predictor()
+        else:
+            return SingleLabelPredictor.from_config(self.predictor_data)
+
+    def update_predictor(self):
+        predictor = self.get_new_predictor()
+        examples = self.decisions.values("text", "value", "reason")
+        predictor.fit(examples, num_workers=8)
+        self.predictor_data = predictor.config
+        self.predictor_updated_at = timezone.now()
         self.save()
 
     class Meta:
@@ -234,33 +284,6 @@ class LabelHeuristic(BaseModel):
         self.num_examples = model.objects.tags(any=[tag.id]).count()
         self.save()
         self.label.update_counts()
-
-
-class LabelPredictor(BaseModel):
-    """Model for label-specific DSPy predictors."""
-
-    label = models.ForeignKey(
-        Label, on_delete=models.CASCADE, related_name="predictors"
-    )
-    model = models.CharField(max_length=255)
-    teacher_model = models.CharField(max_length=255)
-    data = JSONField()
-    version = models.IntegerField(default=0)
-
-    def create(self, *args, **kwargs):
-        self.version = (
-            self.label.predictors.aggregate(Max("version"))["version__max"] + 1
-        )
-        self.label.needs_predictor_update = True
-        self.label.save()
-        return super().create(*args, **kwargs)
-
-    def fit(self):
-        """Fit the predictor to the latest decisions."""
-        raise NotImplementedError("Not implemented")
-
-    class Meta:
-        unique_together = ("label", "version")
 
 
 class DocketEntry(SearchDocumentModel):

@@ -145,3 +145,55 @@ class GEPAPredictor(DSPyPredictor):
             "num_threads": num_workers,
         }
         return dspy.GEPA(**optimizer_args)
+
+
+PROJECT_INSTRUCTIONS_TEMPLATE = """
+You are an annotation assistant providing single-label classification
+annotations for the following label: {label_name}.
+
+When annotating you will be provided a text example. You should respond
+with a boolean `value` indicating whether the label "{label_name}" applies to
+the text, and a brief, one-sentence `reason` explaining how your decision
+aligns with the guidelines below.
+
+Here are some guidelines you should follow when annotating:
+
+Consider these project-level instructions. These are general, project-wide
+instructions that apply to all labels in the project. They may include examples
+of labels other than the one that you are annotating, just remember that you are
+currently annotating for the label "{label_name}" specifically.
+
+```
+{project_instructions}
+```
+"""
+
+LABEL_INSTRUCTIONS_TEMPLATE = """
+The user has also provided some label-specific instructions. These should take precedence
+over the project-level instructions if they are in conflict.
+
+```
+{label_instructions}
+```
+"""
+
+
+class SingleLabelPredictor(GEPAPredictor):
+    def __init__(
+        self,
+        label_name: str,
+        project_instructions: str,
+        *args,
+        label_instructions: str | None = None,
+        **kwargs,
+    ):
+        instructions = PROJECT_INSTRUCTIONS_TEMPLATE.format(
+            label_name=label_name,
+            project_instructions=project_instructions,
+        )
+        if label_instructions:
+            instructions += "\n\n" + LABEL_INSTRUCTIONS_TEMPLATE.format(
+                label_name=label_name,
+                label_instructions=label_instructions,
+            )
+        super().__init__(*args, instructions=instructions, **kwargs)
