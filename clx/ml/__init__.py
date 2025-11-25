@@ -1,18 +1,23 @@
 from pathlib import Path
 
-from .classification_run import ClassificationRun
+from .classification_run import ClassificationRun, TextClassificationRun
 from .mlm_run import MLMRun
 from .multi_label_classification_run import MultiLabelClassificationRun
 from .pipelines import (
     ClassificationPipeline,
     MultiLabelClassificationPipeline,
     Pipeline,
+    TextClassificationPipeline,
 )
+from .token_classification_run import NERRun, TokenClassificationRun
 from .training_run import TrainingRun
 
 task_registry = [
     ClassificationRun,
+    TextClassificationRun,
     MultiLabelClassificationRun,
+    TokenClassificationRun,
+    NERRun,
     MLMRun,
 ]
 
@@ -38,6 +43,7 @@ def training_run(
 
 pipeline_registry = [
     ClassificationPipeline,
+    TextClassificationPipeline,
     MultiLabelClassificationPipeline,
 ]
 

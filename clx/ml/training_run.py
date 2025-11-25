@@ -222,6 +222,7 @@ class TrainingRun:
             trainer_args["eval_dataset"] = eval_dataset
 
         trainer = self.trainer_class(**trainer_args)
+        trainer.training_run = self
 
         # Write the run config
         self.config_path.write_text(json.dumps(self.config, indent=4))

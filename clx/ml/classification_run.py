@@ -67,3 +67,9 @@ class ClassificationRun(TrainingRun):
             raise ValueError(
                 f"Label column must contain only {self.label_names}."
             )
+
+
+class TextClassificationRun(ClassificationRun):
+    """Alias for classification run."""
+
+    task = "text-classification"
