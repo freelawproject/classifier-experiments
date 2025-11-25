@@ -94,3 +94,64 @@ class TrainingRunTest(TestCase):
 
             acc = (eval_data["preds"] == eval_data["labels"]).mean()
             self.assertEqual(acc, 1.0)
+
+    def test_token_classification_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            texts = [
+                "John Doe is a person.",
+                "She gave John Doe a taco.",
+                "John Doe is happy.",
+                "Hello, John Doe",
+            ]
+
+            data = []
+
+            for text in texts:
+                start = text.index("John Doe")
+                for _ in range(300):
+                    data.append(
+                        {
+                            "text": text,
+                            "spans": [
+                                {
+                                    "start": start,
+                                    "end": start + 8,
+                                    "label": "name",
+                                }
+                            ],
+                        }
+                    )
+
+            data = pd.DataFrame(data).sample(frac=1)
+
+            split = int(0.8 * len(data))
+            train_data = data.head(split)
+            eval_data = data.tail(-split)
+            label_names = ["name"]
+
+            run = training_run(
+                "ner",
+                run_name="test",
+                run_dir_parent=temp_dir,
+                base_model_name="docketanalyzer/modernbert-unit-test",
+                label_names=label_names,
+                training_args={
+                    "eval_strategy": "steps",
+                    "eval_steps": 100,
+                    "save_steps": 100,
+                },
+            )
+
+            run.train(train_data, eval_data, overwrite=True)
+            # Remove once pipelines are implemented
+            return
+
+            eval_data["preds"] = run.predict(
+                eval_data["text"].tolist(),
+                batch_size=8,
+            )
+            eval_data["labels"] = eval_data["labels"].apply(sorted)
+            eval_data["preds"] = eval_data["preds"].apply(sorted)
+
+            acc = (eval_data["preds"] == eval_data["labels"]).mean()
+            self.assertEqual(acc, 1.0)

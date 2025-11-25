@@ -82,6 +82,12 @@ class ClassificationPipeline(Pipeline):
             return top_label["label"]
 
 
+class TextClassificationPipeline(ClassificationPipeline):
+    """Alias for classification pipeline."""
+
+    task = "text-classification"
+
+
 class MultiLabelClassificationPipeline(ClassificationPipeline):
     """Multi-label classification pipeline."""
 
