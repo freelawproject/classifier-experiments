@@ -4,7 +4,7 @@ from django.db import models
 from django.db.models import JSONField
 from django.utils import timezone
 
-from clx.llm import SingleLabelPredictor
+from clx.llm import GEPAPredictor, SingleLabelPredictor
 from clx.settings import CACHED_DATASET_DIR
 
 from .custom_heuristics import custom_heuristics
@@ -42,22 +42,26 @@ class Label(BaseModel):
 
     # Predictor config
     llm_models = [
+        ("Gemini 2.5 Flash Lite", "gemini/gemini-2.5-flash-lite"),
         ("Qwen 235B-A22B", "bedrock/qwen.qwen3-235b-a22b-2507-v1:0"),
+        ("Gemini 2.5 Pro", "gemini/gemini-2.5-pro"),
         (
             "Claude Sonnet 4.5",
-            "bedrock/us-west-2.claude-sonnet-4-5-20250929-v1:0",
+            "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         ),
     ]
+    default_inference_model = "gemini/gemini-2.5-flash-lite"
+    default_teacher_model = "gemini/gemini-2.5-pro"
     instructions = models.TextField(null=True, blank=True)
     inference_model = models.CharField(
         max_length=255,
         choices=llm_models,
-        default="bedrock/qwen.qwen3-235b-a22b-2507-v1:0",
+        default=default_inference_model,
     )
     teacher_model = models.CharField(
         max_length=255,
         choices=llm_models,
-        default="bedrock/us-west-2.claude-sonnet-4-5-20250929-v1:0",
+        default=default_teacher_model,
     )
     predictor_data = JSONField(null=True, blank=True)
     predictor_updated_at = models.DateTimeField(null=True, blank=True)
@@ -155,6 +159,7 @@ class Label(BaseModel):
             [LabelTrainsetExample(label_id=self.id, **row) for row in rows],
             batch_size=1000,
         )
+        self.sync_trainset_tags()
         self.trainset_updated_at = timezone.now()
         self.save()
 
@@ -162,13 +167,12 @@ class Label(BaseModel):
         # Add set value from pred + annos
         return pd.DataFrame(self.trainset_examples.all().values())
 
-    def update_trainset_preds(self, num_workers=128):
+    def update_trainset_preds(self, num_threads=32):
         predictor = self.predictor
         trainset = self.load_trainset()
         preds = predictor.predict(
-            trainset["text"].tolist(), num_workers=num_workers
+            trainset["text"].tolist(), num_threads=num_threads
         )
-        print(predictor.last_cost)
         trainset["pred"] = [x.value for x in preds]
         trainset["reason"] = [x.reason for x in preds]
         examples = self.trainset_examples.all()
@@ -184,6 +188,7 @@ class Label(BaseModel):
         )
         self.trainset_num_positive_preds = trainset["pred"].sum()
         self.trainset_num_negative_preds = (~trainset["pred"]).sum()
+        self.sync_trainset_pred_tags()
         self.trainset_predictions_updated_at = timezone.now()
         self.save()
 
@@ -192,6 +197,7 @@ class Label(BaseModel):
             label_name=self.name,
             project_instructions=self.project.instructions,
             label_instructions=self.instructions,
+            model=self.inference_model,
         )
 
     @property
@@ -199,12 +205,96 @@ class Label(BaseModel):
         if self.predictor_data is None:
             return self.get_new_predictor()
         else:
-            return SingleLabelPredictor.from_config(self.predictor_data)
+            return GEPAPredictor.from_config(self.predictor_data)
 
-    def update_predictor(self):
+    @property
+    def trainset_train_tag(self):
+        tag, _ = LabelTag.objects.get_or_create(
+            name="trainset:train",
+            label=self,
+        )
+        return tag
+
+    @property
+    def trainset_eval_tag(self):
+        tag, _ = LabelTag.objects.get_or_create(
+            name="trainset:eval",
+            label=self,
+        )
+        return tag
+
+    @property
+    def trainset_pred_tag(self):
+        tag, _ = LabelTag.objects.get_or_create(
+            name="trainset:pred",
+            label=self,
+        )
+        return tag
+
+    def sync_trainset_tags(self):
+        """Sync tags for train/eval splits to match current trainset examples."""
+        model = self.project.get_search_model()
+
+        train_hashes = list(
+            self.trainset_examples.filter(split="train").values_list(
+                "text_hash", flat=True
+            )
+        )
+        if train_hashes:
+            train_ids = list(
+                model.objects.filter(text_hash__in=train_hashes).values_list(
+                    "id", flat=True
+                )
+            )
+        else:
+            train_ids = []
+        model.bulk_replace_tag(self.trainset_train_tag, train_ids)
+
+        eval_hashes = list(
+            self.trainset_examples.filter(split="eval").values_list(
+                "text_hash", flat=True
+            )
+        )
+        if eval_hashes:
+            eval_ids = list(
+                model.objects.filter(text_hash__in=eval_hashes).values_list(
+                    "id", flat=True
+                )
+            )
+        else:
+            eval_ids = []
+        model.bulk_replace_tag(self.trainset_eval_tag, eval_ids)
+
+    def sync_trainset_pred_tags(self):
+        """Sync tag for positive predictions to match current predicted positives."""
+        model = self.project.get_search_model()
+        pos_hashes = list(
+            self.trainset_examples.filter(pred=True).values_list(
+                "text_hash", flat=True
+            )
+        )
+        if pos_hashes:
+            pos_ids = list(
+                model.objects.filter(text_hash__in=pos_hashes).values_list(
+                    "id", flat=True
+                )
+            )
+        else:
+            pos_ids = []
+        model.bulk_replace_tag(self.trainset_pred_tag, pos_ids)
+
+    def fit_predictor(self):
         predictor = self.get_new_predictor()
         examples = self.decisions.values("text", "value", "reason")
-        predictor.fit(examples, num_workers=8)
+        predictor.fit(
+            examples,
+            num_threads=8,
+            reflection_lm={
+                "model": self.teacher_model,
+                "temperature": 1.0,
+                "max_tokens": 32000,
+            },
+        )
         self.predictor_data = predictor.config
         self.predictor_updated_at = timezone.now()
         self.save()
