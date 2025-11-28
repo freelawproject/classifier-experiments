@@ -205,6 +205,7 @@
                 activeTab: 'search',
                 heuristics: null,
                 decisions: null,
+                displayTags: [],
                 params: {
                     querystring: '',
                     tags: {
@@ -220,21 +221,51 @@
                     numLikely: 1000,
                 },
                 predictorConfig: {
-                    inferenceModel: 'bedrock/qwen.qwen3-235b-a22b-2507-v1:0',
-                    teacherModel: 'bedrock/us-west-2.claude-sonnet-4-5-20250929-v1:0',
-                }
+                    inferenceModel: '{{ label_class.default_inference_model }}',
+                    teacherModel: '{{ label_class.default_teacher_model }}',
+                },
                 page: 1,
                 results: null,
                 total: null,
                 loading: false,
                 error: null,
                 jobs: {},
+                // Helpers
+                orderTagsByActiveLabel() {
+                    const allTags = Object.values(this.tags || {});
+                    if (!this.activeLabelId) {
+                        return {
+                            preferred: [],
+                            others: allTags.slice().sort((a, b) => a.slug.localeCompare(b.slug)),
+                        };
+                    }
+                    const preferred = [];
+                    const others = [];
+                    for (const t of allTags) {
+                        if (t.label_id === this.activeLabelId) {
+                            preferred.push(t);
+                        } else {
+                            others.push(t);
+                        }
+                    }
+                    preferred.sort((a, b) => a.slug.localeCompare(b.slug));
+                    others.sort((a, b) => a.slug.localeCompare(b.slug));
+                    return { preferred, others };
+                },
                 scrollToTop () {
                     if (this.$refs && this.$refs.resultsContainer) {
                         this.$refs.resultsContainer.scrollTo({ top: 0, behavior: 'smooth' });
                     }
                 },
-                // Helpers
+                autoExpand(el) {
+                    if (!el) return;
+                    this.$nextTick(() => {
+                        el.style.height = 'auto';
+                        el.style.overflowY = 'hidden';
+                        el.style.minHeight = '40px';
+                        el.style.height = el.scrollHeight + 'px';
+                    });
+                },
                 createJob(jobName) {
                     const id = (
                         'job-' +
@@ -332,6 +363,7 @@
                     if (page !== null) {
                         this.page = page;
                     } else {
+                        this.page = 1;
                         this.total = null;
                     }
                     const data = await this.apiFetch('search/', {
@@ -359,6 +391,16 @@
                     if (!data) return;
                     this.project = data.project || {};
                 },
+                async updateProjectInstructions(instructions) {
+                    await this.apiFetch('project/update-instructions/', {
+                        method: 'POST',
+                        body: { instructions: instructions || '' },
+                        jobName: 'Updating Project Instructions',
+                    });
+                    if (this.project) {
+                        this.project.instructions = instructions || '';
+                    }
+                },
 
                 // Labels
                 async getLabels() {
@@ -375,6 +417,17 @@
                     };
                     const total = counts.excluded + counts.neutral + counts.likely;
                     return total ? (counts[key] / total) * 100 : 0;
+                },
+                async updateLabelInstructions(labelId, instructions) {
+                    if (!labelId) return;
+                    await this.apiFetch('labels/update-instructions/', {
+                        method: 'POST',
+                        body: { label_id: labelId, instructions: instructions || '' },
+                        jobName: 'Updating Label Instructions',
+                    });
+                    if (this.labels && this.labels[labelId]) {
+                        this.labels[labelId].instructions = instructions || '';
+                    }
                 },
 
                 // Tags
@@ -500,6 +553,7 @@
                         jobName: 'Resampling Trainset',
                     });
                     await this.getLabels();
+                    await this.getTags();
                 },
                 async updateTrainsetPreds(labelId) {
                     if (!labelId) return;
@@ -509,6 +563,21 @@
                         jobName: 'Updating Trainset Predictions',
                     });
                     await this.getLabels();
+                    await this.getTags();
+                },
+                async fitPredictor(labelId) {
+                    if (!labelId) return;
+                    await this.apiFetch('predictor/fit/', {
+                        method: 'POST',
+                        body: {
+                            label_id: labelId,
+                            inference_model: this.predictorConfig.inferenceModel,
+                            teacher_model: this.predictorConfig.teacherModel,
+                        },
+                        jobName: 'Fitting Predictor',
+                    });
+                    await this.getLabels();
+                    await this.getTags();
                 },
 
                 // Initialization
@@ -519,6 +588,8 @@
                     this.trainsetConfig.numExcluded = this.labels?.[labelId]?.trainset_num_excluded || 1000;
                     this.trainsetConfig.numNeutral = this.labels?.[labelId]?.trainset_num_neutral || 1000;
                     this.trainsetConfig.numLikely = this.labels?.[labelId]?.trainset_num_likely || 1000;
+                    this.predictorConfig.inferenceModel = this.labels?.[labelId]?.inference_model || '{{ label_class.default_inference_model }}';
+                    this.predictorConfig.teacherModel = this.labels?.[labelId]?.teacher_model || '{{ label_class.default_teacher_model }}';
                 },
                 async init() {
                     await this.getProject();
