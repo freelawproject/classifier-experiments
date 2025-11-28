@@ -72,4 +72,14 @@ urlpatterns = [
         views.heuristics_sync_custom_endpoint,
         name="heuristics-sync-custom-endpoint",
     ),
+    path(
+        "api/project/<slug:project_id>/predictor/update-trainset/",
+        views.predictor_update_trainset_endpoint,
+        name="predictor-update-trainset-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/predictor/update-trainset-preds/",
+        views.predictor_update_trainset_preds_endpoint,
+        name="predictor-update-trainset-preds-endpoint",
+    ),
 ]

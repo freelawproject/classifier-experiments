@@ -52,9 +52,13 @@ def labels_endpoint(request, project_id):
         "teacher_model",
         "predictor_data",
         "predictor_updated_at",
-        "trainset_sample_per_heuristic_bucket",
+        "trainset_num_excluded",
+        "trainset_num_neutral",
+        "trainset_num_likely",
         "trainset_num_positive_preds",
         "trainset_num_negative_preds",
+        "trainset_predictions_updated_at",
+        "trainset_updated_at",
     )
     labels = {row["id"]: row for row in labels_qs}
     return JsonResponse({"labels": labels})
@@ -85,6 +89,7 @@ def decisions_endpoint(request, project_id):
         "reason",
         "text_hash",
         "text",
+        "updated_at",
     )
     decisions = {d["id"]: d for d in decisions}
     return JsonResponse({"decisions": decisions})
@@ -237,6 +242,35 @@ def heuristics_sync_custom_endpoint(request, project_id):
     return JsonResponse({"ok": True})
 
 
+# Predictor Endpoints
+@csrf_exempt
+@require_POST
+def predictor_update_trainset_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
+    label = Label.objects.get(id=label_id)
+    label.trainset_num_excluded = int(
+        payload.get("trainset_num_excluded", 1000)
+    )
+    label.trainset_num_neutral = int(payload.get("trainset_num_neutral", 1000))
+    label.trainset_num_likely = int(payload.get("trainset_num_likely", 1000))
+    label.save()
+    label.update_trainset()
+    return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+@require_POST
+def predictor_update_trainset_preds_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
+    label = Label.objects.get(id=label_id)
+    label.update_trainset_preds()
+    return JsonResponse({"ok": True})
+
+
 # Views
 def search_view(request, project_id):
     project = Project.objects.get(id=project_id)
@@ -246,6 +280,7 @@ def search_view(request, project_id):
         {
             "project": project,
             "projects": Project.objects.all().order_by("name"),
+            "llm_models": Label.llm_models,
         },
     )
 
