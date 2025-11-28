@@ -150,7 +150,7 @@
                 {% include "search/results_tab.html" %}
                 {% include "search/decisions_tab.html" %}
                 {% include "search/heuristics_tab.html" %}
-                <main class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4" x-show="activeTab === 'predictor'" x-cloak></main>
+                {% include "search/predictor_tab.html" %}
                 <main class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4" x-show="activeTab === 'finetunes'" x-cloak></main>
             </div>
 
@@ -214,6 +214,15 @@
                         not_all: [],
                     },
                 },
+                trainsetConfig: {
+                    numExcluded: 1000,
+                    numNeutral: 1000,
+                    numLikely: 1000,
+                },
+                predictorConfig: {
+                    inferenceModel: 'bedrock/qwen.qwen3-235b-a22b-2507-v1:0',
+                    teacherModel: 'bedrock/us-west-2.claude-sonnet-4-5-20250929-v1:0',
+                }
                 page: 1,
                 results: null,
                 total: null,
@@ -477,11 +486,39 @@
                     await this.getLabels();
                 },
 
+                // Predictor
+                async updateTrainset(labelId) {
+                    if (!labelId) return;
+                    await this.apiFetch('predictor/update-trainset/', {
+                        method: 'POST',
+                        body: {
+                            label_id: labelId,
+                            trainset_num_excluded: this.trainsetConfig.numExcluded,
+                            trainset_num_neutral: this.trainsetConfig.numNeutral,
+                            trainset_num_likely: this.trainsetConfig.numLikely,
+                        },
+                        jobName: 'Resampling Trainset',
+                    });
+                    await this.getLabels();
+                },
+                async updateTrainsetPreds(labelId) {
+                    if (!labelId) return;
+                    await this.apiFetch('predictor/update-trainset-preds/', {
+                        method: 'POST',
+                        body: { label_id: labelId },
+                        jobName: 'Updating Trainset Predictions',
+                    });
+                    await this.getLabels();
+                },
+
                 // Initialization
                 async setActiveLabelId(labelId) {
                     this.activeLabelId = Number(labelId);
                     await this.getHeuristics(labelId);
                     await this.getDecisions(labelId);
+                    this.trainsetConfig.numExcluded = this.labels?.[labelId]?.trainset_num_excluded || 1000;
+                    this.trainsetConfig.numNeutral = this.labels?.[labelId]?.trainset_num_neutral || 1000;
+                    this.trainsetConfig.numLikely = this.labels?.[labelId]?.trainset_num_likely || 1000;
                 },
                 async init() {
                     await this.getProject();

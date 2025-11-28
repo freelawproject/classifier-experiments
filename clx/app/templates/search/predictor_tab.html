@@ -1,0 +1,147 @@
+<main
+    class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4"
+    x-show="activeTab === 'predictor'" x-cloak
+    x-data="{
+        getTrainsetStatus() {
+            const trainset_updated_at = this.labels?.[activeLabelId]?.trainset_updated_at;
+            const trainset_predictions_updated_at = this.labels?.[activeLabelId]?.trainset_predictions_updated_at;
+            const trainset_predictor_updated_at = this.labels?.[activeLabelId]?.trainset_predictor_updated_at;
+            const latest_decision_updated_at = this.decisions ? Math.max(...Object.values(this.decisions).map(d => new Date(d.updated_at))) : null;
+            if (!trainset_updated_at) return 'no_trainset';
+            if (!trainset_predictions_updated_at) return 'no_preds';
+            if (trainset_updated_at > trainset_predictions_updated_at) return 'preds_out_of_date';
+            if (trainset_predictor_updated_at > trainset_predictions_updated_at) return 'preds_out_of_date';
+            return 'up_to_date';
+        },
+        isSampling() {
+            return this.jobs && Object.values(this.jobs).some(j => j.name === 'Resampling Trainset' && j.status === 'pending');
+        },
+        isUpdatingPreds() {
+            return this.jobs && Object.values(this.jobs).some(j => j.name === 'Updating Trainset Predictions' && j.status === 'pending');
+        }
+    }"
+>
+    <div class="py-4">
+        <div class="bg-white border rounded-lg shadow-sm p-4">
+            <!-- Trainset -->
+            <div class="flex items-start justify-between gap-3 mb-3">
+                <h3 class="text-base font-medium text-gray-900">Trainset</h3>
+                <div class="text-xs text-gray-600">
+                    <template x-if="labels?.[activeLabelId]?.trainset_updated_at && !isSampling()">
+                        <span x-text="'Updated ' + new Date(labels?.[activeLabelId]?.trainset_updated_at).toLocaleString()"></span>
+                    </template>
+                    <span x-show="isSampling()">
+                        Resampling...
+                    </span>
+                </div>
+            </div>
+
+            <!-- Warnings -->
+            <template x-if="['no_trainset', 'no_preds', 'preds_out_of_date'].includes(getTrainsetStatus())">
+                <div class="mb-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <span x-show="getTrainsetStatus() === 'no_trainset'">
+                        Train set has not been sampled yet.
+                    </span>
+                    <span x-show="getTrainsetStatus() === 'no_preds'">
+                        Predictions have not been applied yet.
+                    </span>
+                    <span x-show="getTrainsetStatus() === 'preds_out_of_date'">
+                        Predictions are out of date.
+                    </span>
+                </div>
+            </template>
+
+            <!-- Pos/Neg Bar -->
+            <template x-if="!['no_trainset', 'no_preds', 'preds_out_of_date'].includes(getTrainsetStatus())">
+                <div class="mb-4">
+                    <div class="flex items-center justify-between text-xs text-gray-700 mb-1">
+                        <div>
+                            <span class="inline-block h-2 w-2 rounded-sm bg-red-500 mr-2 align-middle"></span>
+                            <span class="align-middle">Negative (<span x-text="labels?.[activeLabelId]?.trainset_num_negative_preds || 0"></span>)</span>
+                        </div>
+                        <div>
+                            <span class="inline-block h-2 w-2 rounded-sm bg-green-500 mr-2 align-middle"></span>
+                            <span class="align-middle">Positive (<span x-text="labels?.[activeLabelId]?.trainset_num_positive_preds || 0"></span>)</span>
+                        </div>
+                    </div>
+                    <div class="flex h-2 w-full overflow-hidden rounded-full">
+                        <div
+                            class="bg-red-500"
+                            :style="(() => { const pos = labels?.[activeLabelId]?.trainset_num_positive_preds || 0; const neg = labels?.[activeLabelId]?.trainset_num_negative_preds || 0; const tot = pos + neg; const pct = tot ? (neg / tot) * 100 : 0; return `width: ${pct}%`; })()"
+                        ></div>
+                        <div
+                            class="bg-green-500"
+                            :style="(() => { const pos = labels?.[activeLabelId]?.trainset_num_positive_preds || 0; const neg = labels?.[activeLabelId]?.trainset_num_negative_preds || 0; const tot = pos + neg; const pct = tot ? (pos / tot) * 100 : 0; return `width: ${pct}%`; })()"
+                        ></div>
+                    </div>
+                </div>
+            </template>
+
+            <div class="flex flex-col gap-3">
+                <!-- TrainsetConfig -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Examples per heuristic bucket</label>
+                    <div class="grid grid-cols-3 gap-3">
+                        <div>
+                            <label class="block text-sm text-gray-700 mb-1">Excluded</label>
+                            <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                x-model.number="trainsetConfig.numExcluded"
+                                class="w-full rounded-md ring-1 ring-gray-300 focus:ring-blue-500 text-sm p-2"
+                                placeholder="e.g., 1000"
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-700 mb-1">Neutral</label>
+                            <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                x-model.number="trainsetConfig.numNeutral"
+                                class="w-full rounded-md ring-1 ring-gray-300 focus:ring-blue-500 text-sm p-2"
+                                placeholder="e.g., 1000"
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-700 mb-1">Likely</label>
+                            <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                x-model.number="trainsetConfig.numLikely"
+                                class="w-full rounded-md ring-1 ring-gray-300 focus:ring-blue-500 text-sm p-2"
+                                placeholder="e.g., 1000"
+                            />
+                        </div>
+                    </div>
+                    <p class="mt-1 text-xs text-gray-500">Controls sampling for train/eval sets across Excluded/Neutral/Likely buckets.</p>
+                </div>
+                <!-- Buttons -->
+                <div class="flex gap-3 justify-end">
+                    <button
+                        type="button"
+                        class="inline-flex items-center justify-center rounded-md bg-blue-600 px-2 py-1 text-white text-xs hover:bg-blue-700 disabled:opacity-50"
+                        :disabled="!activeLabelId || isUpdatingPreds()"
+                        @click="await updateTrainsetPreds(activeLabelId)"
+                        x-show="['no_preds', 'preds_out_of_date'].includes(getTrainsetStatus())"
+                    >
+                        Update Predictions
+                    </button>
+                    <button
+                        type="button"
+                        class="inline-flex items-center justify-center rounded-md bg-blue-600 px-2 py-1 text-white text-xs hover:bg-blue-700 disabled:opacity-50"
+                        :disabled="!activeLabelId || isSampling()"
+                        @click="await updateTrainset(activeLabelId)"
+                    >
+                        Resample Trainset
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</main>
+
+
