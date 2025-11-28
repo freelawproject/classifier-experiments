@@ -80,13 +80,13 @@ class DSPyPredictor:
     def predict(
         self,
         examples: list[dict | str | dspy.Example],
-        num_workers: int | None = None,
+        num_threads: int | None = None,
     ):
         lm = dspy.LM(**self.model)
         with dspy.context(lm=lm):
             preds = self.program.batch(
                 self.prepare_examples(examples),
-                num_threads=num_workers,
+                num_threads=num_threads,
             )
             self.last_cost = sum(
                 [x["cost"] for x in lm.history if x["cost"] is not None]
@@ -121,7 +121,7 @@ class GEPAPredictor(DSPyPredictor):
     default_optimizer_args: ClassVar[dict] = {
         "auto": "light",
         "reflection_lm": {
-            "model": "bedrock/us-west-2.claude-sonnet-4-5-20250929-v1:0/",
+            "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "temperature": 1.0,
             "max_tokens": 32000,
         },
