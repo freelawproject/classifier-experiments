@@ -63,8 +63,14 @@ class Label(BaseModel):
     predictor_updated_at = models.DateTimeField(null=True, blank=True)
 
     # Trainset config
-    trainset_sample_per_heuristic_bucket = models.IntegerField(default=1000)
+    trainset_examples_per_heuristic_bucket = models.IntegerField(default=1000)
+    trainset_num_excluded = models.IntegerField(default=1000)
+    trainset_num_neutral = models.IntegerField(default=1000)
+    trainset_num_likely = models.IntegerField(default=1000)
     trainset_updated_at = models.DateTimeField(null=True, blank=True)
+    trainset_predictions_updated_at = models.DateTimeField(
+        null=True, blank=True
+    )
     trainset_num_positive_preds = models.IntegerField(default=0)
     trainset_num_negative_preds = models.IntegerField(default=0)
 
@@ -108,66 +114,77 @@ class Label(BaseModel):
         self.num_neutral = self.neutral_query().count()
         self.save()
 
-    @property
-    def trainset_train_tag(self):
-        """Tag for training examples in the trainset."""
-        tag, _ = LabelTag.objects.get_or_create(
-            label=self, name="trainset:train"
-        )
-        return tag
-
-    @property
-    def trainset_eval_tag(self):
-        """Tag for eval examples in the trainset."""
-        tag, _ = LabelTag.objects.get_or_create(
-            label=self, name="trainset:eval"
-        )
-        return tag
-
-    @property
-    def trainset_pred_tag(self):
-        """Tag for positive predictions in the trainset."""
-        tag, _ = LabelTag.objects.get_or_create(
-            label=self, name="trainset:pred"
-        )
-        return tag
-
     def sample_trainset(self, ratio=1):
         """Sample trainset examples."""
         data = []
         excluded_examples = self.excluded_query().order_by("?").values("id")
         data += list(
-            excluded_examples[
-                : int(self.trainset_sample_per_heuristic_bucket * ratio)
-            ]
+            excluded_examples[: int(self.trainset_num_excluded * ratio)]
         )
         neutral_examples = self.neutral_query().order_by("?").values("id")
         data += list(
-            neutral_examples[
-                : int(self.trainset_sample_per_heuristic_bucket * ratio)
-            ]
+            neutral_examples[: int(self.trainset_num_neutral * ratio)]
         )
         likely_examples = self.likely_query().order_by("?").values("id")
-        data += list(
-            likely_examples[
-                : int(self.trainset_sample_per_heuristic_bucket * ratio)
-            ]
-        )
+        data += list(likely_examples[: int(self.trainset_num_likely * ratio)])
         data = pd.DataFrame(data).drop_duplicates(subset="id").sample(frac=1)
-        return data
+        return data["id"].tolist()
 
     def update_trainset(self):
+        self.trainset_examples.all().delete()
         model = self.project.get_search_model()
 
-        trainset_train = self.sample_trainset(ratio=1)
-        train_tag = self.trainset_train_tag
-        model.bulk_replace_tag(train_tag.id, trainset_train["id"].tolist())
+        train_ids = self.sample_trainset(ratio=1)
+        train_examples = model.objects.filter(id__in=train_ids).values(
+            "text", "text_hash"
+        )
+        train_examples = pd.DataFrame(train_examples)
+        train_examples["split"] = "train"
 
-        trainset_eval = self.sample_trainset(ratio=0.2)
-        eval_tag = self.trainset_eval_tag
-        model.bulk_replace_tag(eval_tag.id, trainset_eval["id"].tolist())
+        eval_ids = self.sample_trainset(ratio=0.2)
+        eval_examples = model.objects.filter(id__in=eval_ids).values(
+            "text", "text_hash"
+        )
+        eval_examples = pd.DataFrame(eval_examples)
+        eval_examples["split"] = "eval"
 
+        trainset = pd.concat([train_examples, eval_examples])
+        trainset = trainset.drop_duplicates(subset="text_hash")
+        rows = trainset.to_dict("records")
+        LabelTrainsetExample.objects.bulk_create(
+            [LabelTrainsetExample(label_id=self.id, **row) for row in rows],
+            batch_size=1000,
+        )
         self.trainset_updated_at = timezone.now()
+        self.save()
+
+    def load_trainset(self):
+        # Add set value from pred + annos
+        return pd.DataFrame(self.trainset_examples.all().values())
+
+    def update_trainset_preds(self, num_workers=128):
+        predictor = self.predictor
+        trainset = self.load_trainset()
+        preds = predictor.predict(
+            trainset["text"].tolist(), num_workers=num_workers
+        )
+        print(predictor.last_cost)
+        trainset["pred"] = [x.value for x in preds]
+        trainset["reason"] = [x.reason for x in preds]
+        examples = self.trainset_examples.all()
+        examples = {e.id: e for e in examples}
+        for row in trainset.to_dict("records"):
+            example = examples[row["id"]]
+            example.pred = row["pred"]
+            example.reason = row["reason"]
+        LabelTrainsetExample.objects.bulk_update(
+            list(examples.values()),
+            fields=["pred", "reason"],
+            batch_size=1000,
+        )
+        self.trainset_num_positive_preds = trainset["pred"].sum()
+        self.trainset_num_negative_preds = (~trainset["pred"]).sum()
+        self.trainset_predictions_updated_at = timezone.now()
         self.save()
 
     def get_new_predictor(self):
@@ -347,6 +364,25 @@ class LabelHeuristic(BaseModel):
         self.num_examples = model.objects.tags(any=[tag.id]).count()
         self.save()
         self.label.update_counts()
+
+
+class LabelTrainsetExample(BaseModel):
+    """Model for label trainset examples."""
+
+    label = models.ForeignKey(
+        Label, on_delete=models.CASCADE, related_name="trainset_examples"
+    )
+    text_hash = models.CharField(max_length=255)
+    text = models.TextField(null=True, blank=True)
+    split = models.CharField(
+        max_length=10,
+        choices=[("train", "Train"), ("eval", "Eval")],
+    )
+    pred = models.BooleanField(null=True, blank=True)
+    reason = models.TextField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ("label", "text_hash")
 
 
 class DocketEntry(SearchDocumentModel):
