@@ -37,6 +37,19 @@ def project_endpoint(request, project_id):
     )
 
 
+@csrf_exempt
+@require_POST
+def project_update_instructions_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    instructions = payload.get("instructions", "")
+    project = Project.objects.get(id=project_id)
+    project.instructions = instructions
+    project.save()
+    return JsonResponse(
+        {"ok": True, "instructions": project.instructions or ""}
+    )
+
+
 # Labels Endpoints
 @require_GET
 def labels_endpoint(request, project_id):
@@ -62,6 +75,18 @@ def labels_endpoint(request, project_id):
     )
     labels = {row["id"]: row for row in labels_qs}
     return JsonResponse({"labels": labels})
+
+
+@csrf_exempt
+@require_POST
+def labels_update_instructions_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    instructions = payload.get("instructions", "")
+    label = Label.objects.get(id=label_id, project_id=project_id)
+    label.instructions = instructions
+    label.save()
+    return JsonResponse({"ok": True})
 
 
 # Tags Endpoints
@@ -271,6 +296,20 @@ def predictor_update_trainset_preds_endpoint(request, project_id):
     return JsonResponse({"ok": True})
 
 
+@csrf_exempt
+@require_POST
+def predictor_fit_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
+    label = Label.objects.get(id=label_id)
+    label.inference_model = payload.get("inference_model")
+    label.teacher_model = payload.get("teacher_model")
+    label.save()
+    label.fit_predictor()
+    return JsonResponse({"ok": True})
+
+
 # Views
 def search_view(request, project_id):
     project = Project.objects.get(id=project_id)
@@ -280,7 +319,7 @@ def search_view(request, project_id):
         {
             "project": project,
             "projects": Project.objects.all().order_by("name"),
-            "llm_models": Label.llm_models,
+            "label_class": Label,
         },
     )
 
