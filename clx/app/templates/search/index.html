@@ -2,7 +2,6 @@
 
 {% block content %}
 <div class="bg-gray-50 text-gray-900" x-data="searchComponent('/api/project/{{ project.id }}/')" x-init="init()">
-
     <!-- Navbar -->
     <nav class="h-12 sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-gray-200">
         <div class="max-w-[1460px] mx-auto h-full px-4 flex items-center justify-between">
@@ -151,7 +150,7 @@
                 {% include "search/results_tab.html" %}
                 {% include "search/decisions_tab.html" %}
                 {% include "search/heuristics_tab.html" %}
-                <main class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4" x-show="activeTab === 'predictor'" x-cloak></main>
+                {% include "search/predictor_tab.html" %}
                 <main class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4" x-show="activeTab === 'finetunes'" x-cloak></main>
             </div>
 
@@ -188,6 +187,8 @@
                         </div>
                     </div>
                 </div>
+                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(project, null, 2)"></pre>
+                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(labels[activeLabelId], null, 2)"></pre>
                 <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(jobs, null, 2)"></pre>
             </aside>
         </div>
@@ -197,12 +198,14 @@
         function searchComponent(apiBase) {
             return {
                 apiBase,
+                project: null,
                 labels: null,
                 tags: null,
                 activeLabelId: null,
                 activeTab: 'search',
                 heuristics: null,
                 decisions: null,
+                displayTags: [],
                 params: {
                     querystring: '',
                     tags: {
@@ -212,18 +215,57 @@
                         not_all: [],
                     },
                 },
+                trainsetConfig: {
+                    numExcluded: 1000,
+                    numNeutral: 1000,
+                    numLikely: 1000,
+                },
+                predictorConfig: {
+                    inferenceModel: '{{ label_class.default_inference_model }}',
+                    teacherModel: '{{ label_class.default_teacher_model }}',
+                },
                 page: 1,
                 results: null,
                 total: null,
                 loading: false,
                 error: null,
                 jobs: {},
+                // Helpers
+                orderTagsByActiveLabel() {
+                    const allTags = Object.values(this.tags || {});
+                    if (!this.activeLabelId) {
+                        return {
+                            preferred: [],
+                            others: allTags.slice().sort((a, b) => a.slug.localeCompare(b.slug)),
+                        };
+                    }
+                    const preferred = [];
+                    const others = [];
+                    for (const t of allTags) {
+                        if (t.label_id === this.activeLabelId) {
+                            preferred.push(t);
+                        } else {
+                            others.push(t);
+                        }
+                    }
+                    preferred.sort((a, b) => a.slug.localeCompare(b.slug));
+                    others.sort((a, b) => a.slug.localeCompare(b.slug));
+                    return { preferred, others };
+                },
                 scrollToTop () {
                     if (this.$refs && this.$refs.resultsContainer) {
                         this.$refs.resultsContainer.scrollTo({ top: 0, behavior: 'smooth' });
                     }
                 },
-                // Helpers
+                autoExpand(el) {
+                    if (!el) return;
+                    this.$nextTick(() => {
+                        el.style.height = 'auto';
+                        el.style.overflowY = 'hidden';
+                        el.style.minHeight = '40px';
+                        el.style.height = el.scrollHeight + 'px';
+                    });
+                },
                 createJob(jobName) {
                     const id = (
                         'job-' +
@@ -321,6 +363,7 @@
                     if (page !== null) {
                         this.page = page;
                     } else {
+                        this.page = 1;
                         this.total = null;
                     }
                     const data = await this.apiFetch('search/', {
@@ -342,6 +385,23 @@
                     this.loading = false;
                 },
 
+                // Project
+                async getProject() {
+                    const data = await this.apiFetch('project/', { method: 'GET' })
+                    if (!data) return;
+                    this.project = data.project || {};
+                },
+                async updateProjectInstructions(instructions) {
+                    await this.apiFetch('project/update-instructions/', {
+                        method: 'POST',
+                        body: { instructions: instructions || '' },
+                        jobName: 'Updating Project Instructions',
+                    });
+                    if (this.project) {
+                        this.project.instructions = instructions || '';
+                    }
+                },
+
                 // Labels
                 async getLabels() {
                     const data = await this.apiFetch('labels/', { method: 'GET' });
@@ -357,6 +417,17 @@
                     };
                     const total = counts.excluded + counts.neutral + counts.likely;
                     return total ? (counts[key] / total) * 100 : 0;
+                },
+                async updateLabelInstructions(labelId, instructions) {
+                    if (!labelId) return;
+                    await this.apiFetch('labels/update-instructions/', {
+                        method: 'POST',
+                        body: { label_id: labelId, instructions: instructions || '' },
+                        jobName: 'Updating Label Instructions',
+                    });
+                    if (this.labels && this.labels[labelId]) {
+                        this.labels[labelId].instructions = instructions || '';
+                    }
                 },
 
                 // Tags
@@ -468,13 +539,60 @@
                     await this.getLabels();
                 },
 
+                // Predictor
+                async updateTrainset(labelId) {
+                    if (!labelId) return;
+                    await this.apiFetch('predictor/update-trainset/', {
+                        method: 'POST',
+                        body: {
+                            label_id: labelId,
+                            trainset_num_excluded: this.trainsetConfig.numExcluded,
+                            trainset_num_neutral: this.trainsetConfig.numNeutral,
+                            trainset_num_likely: this.trainsetConfig.numLikely,
+                        },
+                        jobName: 'Resampling Trainset',
+                    });
+                    await this.getLabels();
+                    await this.getTags();
+                },
+                async updateTrainsetPreds(labelId) {
+                    if (!labelId) return;
+                    await this.apiFetch('predictor/update-trainset-preds/', {
+                        method: 'POST',
+                        body: { label_id: labelId },
+                        jobName: 'Updating Trainset Predictions',
+                    });
+                    await this.getLabels();
+                    await this.getTags();
+                },
+                async fitPredictor(labelId) {
+                    if (!labelId) return;
+                    await this.apiFetch('predictor/fit/', {
+                        method: 'POST',
+                        body: {
+                            label_id: labelId,
+                            inference_model: this.predictorConfig.inferenceModel,
+                            teacher_model: this.predictorConfig.teacherModel,
+                        },
+                        jobName: 'Fitting Predictor',
+                    });
+                    await this.getLabels();
+                    await this.getTags();
+                },
+
                 // Initialization
                 async setActiveLabelId(labelId) {
                     this.activeLabelId = Number(labelId);
                     await this.getHeuristics(labelId);
                     await this.getDecisions(labelId);
+                    this.trainsetConfig.numExcluded = this.labels?.[labelId]?.trainset_num_excluded || 1000;
+                    this.trainsetConfig.numNeutral = this.labels?.[labelId]?.trainset_num_neutral || 1000;
+                    this.trainsetConfig.numLikely = this.labels?.[labelId]?.trainset_num_likely || 1000;
+                    this.predictorConfig.inferenceModel = this.labels?.[labelId]?.inference_model || '{{ label_class.default_inference_model }}';
+                    this.predictorConfig.teacherModel = this.labels?.[labelId]?.teacher_model || '{{ label_class.default_teacher_model }}';
                 },
                 async init() {
+                    await this.getProject();
                     await this.getLabels();
                     await this.getTags();
                     await this.setActiveLabelId(Object.values(this.labels)[0]?.id);

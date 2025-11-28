@@ -1,5 +1,4 @@
 import json
-from copy import deepcopy
 from pathlib import Path
 from typing import ClassVar
 
@@ -11,7 +10,7 @@ class DSPyPredictor:
     default_model = "bedrock/qwen.qwen3-235b-a22b-2507-v1:0"
     default_signature_str = "text: str -> value: bool"
     default_input_fields: ClassVar[list[str]] = ["text"]
-    default_optimizer_args: ClassVar[dict] = {}
+    default_optimizer_args: ClassVar[dict] = {"auto": "light"}
 
     def __init__(
         self,
@@ -19,7 +18,6 @@ class DSPyPredictor:
         signature_str: str | None = None,
         instructions: str | None = None,
         input_fields: list[str] | None = None,
-        optimizer_args: dict | None = None,
     ):
         """Initialize the DSPy program."""
         model = model or self.default_model
@@ -29,8 +27,8 @@ class DSPyPredictor:
         self.signature_str = signature_str or self.default_signature_str
         self.instructions = instructions
         self.input_fields = input_fields or self.default_input_fields
-        self.optimizer_args = optimizer_args or self.default_optimizer_args
         self._program = None
+        self.last_cost = None
 
     @property
     def config(self):
@@ -39,7 +37,6 @@ class DSPyPredictor:
             "signature_str": self.signature_str,
             "instructions": self.instructions,
             "input_fields": self.input_fields,
-            "optimizer_args": self.optimizer_args,
             "state": self.program.dump_state(),
         }
 
@@ -83,65 +80,119 @@ class DSPyPredictor:
     def predict(
         self,
         examples: list[dict | str | dspy.Example],
-        num_workers: int | None = None,
+        num_threads: int | None = None,
     ):
         lm = dspy.LM(**self.model)
         with dspy.context(lm=lm):
-            return self.program.batch(
+            preds = self.program.batch(
                 self.prepare_examples(examples),
-                num_threads=num_workers,
+                num_threads=num_threads,
             )
+            self.last_cost = sum(
+                [x["cost"] for x in lm.history if x["cost"] is not None]
+            )
+            return preds
 
-    def load_optimizer(self, num_workers: int | None = None):
+    def load_optimizer(self, **optimizer_args):
         def metric(e, p, *args, **kwargs):
             return int(bool(e.value) == bool(p.value))
 
         optimizer_args = {
             "metric": metric,
-            "auto": "light",
-            **self.optimizer_args,
-            "num_threads": num_workers,
+            **self.default_optimizer_args,
+            **optimizer_args,
         }
         return dspy.MIPROv2(**optimizer_args)
 
     def fit(
         self,
         examples: list[dict | str | dspy.Example],
-        num_workers: int | None = None,
+        **optimizer_args: dict,
     ):
         lm = dspy.LM(**self.model)
         with dspy.context(lm=lm):
             examples = self.prepare_examples(examples)
-            optimizer = self.load_optimizer(num_workers)
+            optimizer = self.load_optimizer(**optimizer_args)
             self._program = optimizer.compile(self.program, trainset=examples)
 
 
 class GEPAPredictor(DSPyPredictor):
     default_signature_str = "text: str -> value: bool, reason: str"
     default_optimizer_args: ClassVar[dict] = {
+        "auto": "light",
         "reflection_lm": {
-            "model": "bedrock/us-west-2.claude-sonnet-4-5-20250929-v1:0/",
+            "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "temperature": 1.0,
             "max_tokens": 32000,
         },
     }
 
-    def load_optimizer(self, num_workers: int | None = None):
+    def load_optimizer(self, **optimizer_args):
         def metric(e, p, *args, **kwargs):
             result = {"score": int(bool(e.value) == bool(p.value))}
             if e.reason:
                 result["feedback"] = e.reason
             return ScoreWithFeedback(**result)
 
-        optimizer_args = deepcopy(self.optimizer_args)
-        reflection_lm = deepcopy(self.default_optimizer_args["reflection_lm"])
-        if "reflection_lm" in optimizer_args:
-            reflection_lm = optimizer_args.pop("reflection_lm")
         optimizer_args = {
             "metric": metric,
-            "auto": "light",
+            **self.default_optimizer_args,
             **optimizer_args,
-            "reflection_lm": dspy.LM(**reflection_lm),
-            "num_threads": num_workers,
         }
+        if "reflection_lm" in optimizer_args:
+            optimizer_args["reflection_lm"] = dspy.LM(
+                **optimizer_args["reflection_lm"]
+            )
         return dspy.GEPA(**optimizer_args)
+
+
+PROJECT_INSTRUCTIONS_TEMPLATE = """
+You are an annotation assistant providing single-label classification
+annotations for the following label: {label_name}.
+
+When annotating you will be provided a text example. You should respond
+with a boolean `value` indicating whether the label "{label_name}" applies to
+the text, and a brief, one-sentence `reason` explaining how your decision
+aligns with the guidelines below.
+
+Here are some guidelines you should follow when annotating:
+
+Consider these project-level instructions. These are general, project-wide
+instructions that apply to all labels in the project. They may include examples
+of labels other than the one that you are annotating, just remember that you are
+currently annotating for the label "{label_name}" specifically.
+
+```
+{project_instructions}
+```
+"""
+
+LABEL_INSTRUCTIONS_TEMPLATE = """
+The user has also provided some label-specific instructions. These should take precedence
+over the project-level instructions if they are in conflict.
+
+```
+{label_instructions}
+```
+"""
+
+
+class SingleLabelPredictor(GEPAPredictor):
+    def __init__(
+        self,
+        label_name: str,
+        project_instructions: str,
+        *args,
+        label_instructions: str | None = None,
+        **kwargs,
+    ):
+        instructions = PROJECT_INSTRUCTIONS_TEMPLATE.format(
+            label_name=label_name,
+            project_instructions=project_instructions,
+        )
+        if label_instructions:
+            instructions += "\n\n" + LABEL_INSTRUCTIONS_TEMPLATE.format(
+                label_name=label_name,
+                label_instructions=label_instructions,
+            )
+        super().__init__(*args, instructions=instructions, **kwargs)

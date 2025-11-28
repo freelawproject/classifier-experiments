@@ -8,6 +8,16 @@ urlpatterns = [
         "project/<slug:project_id>/search/", views.search_view, name="search"
     ),
     path(
+        "api/project/<slug:project_id>/project/",
+        views.project_endpoint,
+        name="project",
+    ),
+    path(
+        "api/project/<slug:project_id>/project/update-instructions/",
+        views.project_update_instructions_endpoint,
+        name="project-update-instructions-endpoint",
+    ),
+    path(
         "api/project/<slug:project_id>/search/",
         views.search_endpoint,
         name="search-endpoint",
@@ -16,6 +26,11 @@ urlpatterns = [
         "api/project/<slug:project_id>/labels/",
         views.labels_endpoint,
         name="labels-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/labels/update-instructions/",
+        views.labels_update_instructions_endpoint,
+        name="labels-update-instructions-endpoint",
     ),
     path(
         "api/project/<slug:project_id>/tags/",
@@ -66,5 +81,20 @@ urlpatterns = [
         "api/project/<slug:project_id>/heuristics/sync-custom/",
         views.heuristics_sync_custom_endpoint,
         name="heuristics-sync-custom-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/predictor/update-trainset/",
+        views.predictor_update_trainset_endpoint,
+        name="predictor-update-trainset-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/predictor/update-trainset-preds/",
+        views.predictor_update_trainset_preds_endpoint,
+        name="predictor-update-trainset-preds-endpoint",
+    ),
+    path(
+        "api/project/<slug:project_id>/predictor/fit/",
+        views.predictor_fit_endpoint,
+        name="predictor-fit-endpoint",
     ),
 ]

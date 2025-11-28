@@ -21,16 +21,75 @@ def search_endpoint(request, project_id):
     return JsonResponse(model.objects.search(**payload))
 
 
+# Project Endpoints
+@require_GET
+def project_endpoint(request, project_id):
+    project = Project.objects.get(id=project_id)
+    print(project)
+    return JsonResponse(
+        {
+            "project": {
+                "id": project.id,
+                "name": project.name,
+                "instructions": project.instructions or "",
+            }
+        }
+    )
+
+
+@csrf_exempt
+@require_POST
+def project_update_instructions_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    instructions = payload.get("instructions", "")
+    project = Project.objects.get(id=project_id)
+    project.instructions = instructions
+    project.save()
+    return JsonResponse(
+        {"ok": True, "instructions": project.instructions or ""}
+    )
+
+
+# Labels Endpoints
 @require_GET
 def labels_endpoint(request, project_id):
     project = Project.objects.get(id=project_id)
     labels_qs = Label.objects.filter(project=project).values(
-        "id", "name", "num_excluded", "num_neutral", "num_likely"
+        "id",
+        "name",
+        "num_excluded",
+        "num_neutral",
+        "num_likely",
+        "instructions",
+        "inference_model",
+        "teacher_model",
+        "predictor_data",
+        "predictor_updated_at",
+        "trainset_num_excluded",
+        "trainset_num_neutral",
+        "trainset_num_likely",
+        "trainset_num_positive_preds",
+        "trainset_num_negative_preds",
+        "trainset_predictions_updated_at",
+        "trainset_updated_at",
     )
     labels = {row["id"]: row for row in labels_qs}
     return JsonResponse({"labels": labels})
 
 
+@csrf_exempt
+@require_POST
+def labels_update_instructions_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    instructions = payload.get("instructions", "")
+    label = Label.objects.get(id=label_id, project_id=project_id)
+    label.instructions = instructions
+    label.save()
+    return JsonResponse({"ok": True})
+
+
+# Tags Endpoints
 @require_GET
 def tags_endpoint(request, project_id):
     project = Project.objects.get(id=project_id)
@@ -55,6 +114,7 @@ def decisions_endpoint(request, project_id):
         "reason",
         "text_hash",
         "text",
+        "updated_at",
     )
     decisions = {d["id"]: d for d in decisions}
     return JsonResponse({"decisions": decisions})
@@ -207,6 +267,49 @@ def heuristics_sync_custom_endpoint(request, project_id):
     return JsonResponse({"ok": True})
 
 
+# Predictor Endpoints
+@csrf_exempt
+@require_POST
+def predictor_update_trainset_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
+    label = Label.objects.get(id=label_id)
+    label.trainset_num_excluded = int(
+        payload.get("trainset_num_excluded", 1000)
+    )
+    label.trainset_num_neutral = int(payload.get("trainset_num_neutral", 1000))
+    label.trainset_num_likely = int(payload.get("trainset_num_likely", 1000))
+    label.save()
+    label.update_trainset()
+    return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+@require_POST
+def predictor_update_trainset_preds_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
+    label = Label.objects.get(id=label_id)
+    label.update_trainset_preds()
+    return JsonResponse({"ok": True})
+
+
+@csrf_exempt
+@require_POST
+def predictor_fit_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
+    label = Label.objects.get(id=label_id)
+    label.inference_model = payload.get("inference_model")
+    label.teacher_model = payload.get("teacher_model")
+    label.save()
+    label.fit_predictor()
+    return JsonResponse({"ok": True})
+
+
 # Views
 def search_view(request, project_id):
     project = Project.objects.get(id=project_id)
@@ -216,6 +319,7 @@ def search_view(request, project_id):
         {
             "project": project,
             "projects": Project.objects.all().order_by("name"),
+            "label_class": Label,
         },
     )
 
