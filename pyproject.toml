@@ -9,7 +9,7 @@ name = "clx"
 version = "0.0.1"
 description = "Toolkit for running experiments and developing classifiers."
 authors = [{ name = "Free Law Project", email = "info@free.law" }]
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 readme = "README.md"
 license = "BSD-2-Clause"
 keywords = [
@@ -45,6 +45,7 @@ dependencies = [
   "python-dotenv>=1.2.1",
   "requests>=2.32.5",
   "scikit-learn>=1.7.2",
+  "tensorboard>=2.20.0",
   "tqdm>=4.67.1",
   "transformers[torch]>=4.57.1",
 ]
