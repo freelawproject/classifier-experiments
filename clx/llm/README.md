@@ -129,7 +129,7 @@ Then you can use your tool with an agent. Here, the `tool_choice="required"` for
 
 ```python
 agent = Agent(tools=[ExtractVerbTool], tool_choice="required")
-agent.step("Extract the verbs: 'The cat chased the dog.'")
+agent.step("Extract the verbs: 'The cat chased the dog.'", call_tools=True)
 print(agent.state)
 
 """

@@ -1,5 +1,5 @@
 import json
-from typing import Any
+from typing import Any, ClassVar
 
 import litellm
 from pydantic import BaseModel, Field
@@ -39,22 +39,37 @@ class Tool(BaseModel):
 class Agent:
     """A litellm wrapper for tool calling agents."""
 
+    default_model = "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0"
+    default_tools: ClassVar[list[Tool]] = []
+    default_max_steps = 30
+    default_messages: ClassVar[list[dict[str, str]]] = []
+    default_completion_args: ClassVar[dict[str, Any]] = {}
+    on_init_args: ClassVar[list[str]] = []
+
     def __init__(
         self,
-        model: str = "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+        model: str = None,
         tools: list[Tool] | None = None,
         system_prompt: str | None = None,
         messages: list[dict[str, str]] | None = None,
         state: dict | None = None,
-        max_steps: int = 30,
+        max_steps: int = None,
         **completion_args: dict[str, Any],
     ):
         """Init agent."""
-        self.completion_args = {"model": model, **completion_args}
-        self.tools = tools or []
+        init_args = {
+            arg: completion_args.pop(arg, None) for arg in self.on_init_args
+        }
+        model = model or self.default_model
+        self.completion_args = {
+            "model": model,
+            **self.default_completion_args,
+            **completion_args,
+        }
+        self.tools = tools or self.default_tools
         self.tools = {tool.__name__: tool for tool in self.tools}
         self.tool_schemas = [tool.get_schema() for tool in self.tools.values()]
-        self.messages = messages or []
+        self.messages = messages or self.default_messages
         if system_prompt is not None:
             self.messages = [
                 {"role": "system", "content": system_prompt},
@@ -62,7 +77,12 @@ class Agent:
             ]
         self.state = state or {}
         self.r = None
-        self.max_steps = max_steps
+        self.max_steps = max_steps or self.default_max_steps
+        self.on_init(**init_args)
+
+    def on_init(self, **kwargs):
+        """Hook to run after initialization."""
+        pass
 
     @property
     def sanitized_messages(self):
@@ -90,6 +110,7 @@ class Agent:
     def step(
         self,
         messages: list[dict[str, str]] | str | None = None,
+        call_tools: bool = False,
         **completion_args: dict,
     ) -> tuple[dict, str]:
         """Take a single conversation step."""
@@ -118,7 +139,7 @@ class Agent:
         self.messages.append(response_message)
 
         # Run tools if present
-        if response_message.get("tool_calls"):
+        if response_message.get("tool_calls") and call_tools:
             for tool_call in response_message["tool_calls"]:
                 tool_name = tool_call["function"]["name"]
                 tool = self.tools[tool_name]
@@ -133,7 +154,13 @@ class Agent:
                         "args": tool_args,
                     }
                 )
+
+        self.on_step(response_message)
         return response_message
+
+    def on_step(self, response_message: dict):
+        """Hook to run after a step."""
+        pass
 
     def run(
         self,
@@ -142,11 +169,17 @@ class Agent:
     ):
         """Run a sequence of steps including tool calls."""
         for _ in range(self.max_steps):
-            response_message = self.step(messages, **completion_args)
+            response_message = self.step(
+                messages, **completion_args, call_tools=True
+            )
             messages = None  # Only pass messages on the first step
             if self.r.choices[0].finish_reason != "tool_calls":
                 break
         return response_message
+
+    def __call__(self, **kwargs):
+        """Implement custom workflow here."""
+        pass
 
 
 __all__ = ["Agent", "Tool", "Field"]
