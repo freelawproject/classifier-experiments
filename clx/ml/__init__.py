@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from .classification_run import ClassificationRun, TextClassificationRun
+from .distill_mlm_run import DistillMLMRun
 from .mlm_run import MLMRun
 from .multi_label_classification_run import MultiLabelClassificationRun
 from .pipelines import (
@@ -14,6 +15,7 @@ from .training_run import TrainingRun
 
 task_registry = [
     ClassificationRun,
+    DistillMLMRun,
     TextClassificationRun,
     MultiLabelClassificationRun,
     TokenClassificationRun,
