@@ -77,7 +77,7 @@ class SearchQuerySet(CopyQuerySet):
                         or_part = or_part[1:].strip()
                         condition = Q(text_prefix__istartswith=or_part)
                     else:
-                        condition = Q(text__icontains=or_part)
+                        condition = Q(text__icontains=or_part.strip())
                     if negated:
                         condition = ~condition
                     if or_condition is None:
