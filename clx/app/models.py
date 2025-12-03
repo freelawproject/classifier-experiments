@@ -3,9 +3,9 @@ from django.apps import apps
 from django.db import models
 from django.db.models import JSONField
 from django.utils import timezone
+from tqdm import tqdm
 
 from clx.llm import GEPAPredictor, SingleLabelPredictor
-from clx.settings import CACHED_DATASET_DIR
 
 from .custom_heuristics import custom_heuristics
 from .search_utils import BaseModel, SearchDocumentModel
@@ -419,6 +419,7 @@ class LabelHeuristic(BaseModel):
 
                 for and_part in querystring.split(","):
                     and_part = and_part.strip()
+                    meets_any_or = False
                     for or_part in and_part.split("|"):
                         or_part = or_part.strip()
                         negated = False
@@ -427,10 +428,12 @@ class LabelHeuristic(BaseModel):
                             negated = True
                         if or_part.startswith("^"):
                             or_part = or_part[1:].strip()
-                            if text.startswith(or_part.strip()) == negated:
-                                return False
-                        elif (or_part.strip() in text) == negated:
-                            return False
+                            if text.startswith(or_part.strip()) != negated:
+                                meets_any_or = True
+                        elif (or_part.strip() in text) != negated:
+                            meets_any_or = True
+                    if not meets_any_or:
+                        return False
                 return True
             elif self.custom is not None:
                 return custom_heuristics[self.custom]["apply_fn"](
@@ -443,12 +446,18 @@ class LabelHeuristic(BaseModel):
         tag, _ = LabelTag.objects.get_or_create(
             name=self.name, label=self.label, heuristic=self
         )
-        data = pd.read_csv(CACHED_DATASET_DIR / f"{self.label.project.id}.csv")
         apply_fn = self.get_apply_fn()
-        data = data[data["text"].progress_apply(apply_fn)]
-        example_ids = data["id"].tolist()
-        print(f"Applying heuristic {self.name} to {len(example_ids)} examples")
+        example_ids = []
         model = self.label.project.get_search_model()
+        batch_size = 1000000
+        batches = model.objects.batch_df("id", "text", batch_size=batch_size)
+        for batch in tqdm(
+            batches,
+            desc="Applying heuristic",
+            total=model.objects.count() // batch_size,
+        ):
+            batch = batch[batch["text"].apply(apply_fn)]
+            example_ids.extend(batch["id"].tolist())
         model.bulk_replace_tag(tag.id, example_ids)
         self.applied_at = timezone.now()
         self.num_examples = model.objects.tags(any=[tag.id]).count()

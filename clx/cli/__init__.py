@@ -1,6 +1,7 @@
 import click
 
 from .cache_datasets import cache_datasets
+from .cleanup import cleanup
 from .config import config
 from .generate_docket_sample import generate_docket_sample
 from .manage import manage
@@ -18,3 +19,4 @@ cli.add_command(manage)
 cli.add_command(config)
 cli.add_command(predict_scales)
 cli.add_command(cache_datasets)
+cli.add_command(cleanup)
