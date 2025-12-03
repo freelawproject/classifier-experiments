@@ -59,7 +59,7 @@ To extract a span, you should provide the text that you want to extract. However
 since the extracted text may not be unique you should also provide a context string.
 This is a string of text that includes extracted text and appears uniquely within the text.
 
-For example, given the text ""The cat chased the dog and the dog chased the cat."
+For example, given the text "The cat chased the dog and the dog chased the cat."
 If the task was to extract verbs performed *by the cat* you might return a span with
 "chased" as the extracted_text and "the cat chased" as the context_string, to indicate
 that you are capturing the *first* instance of "chased" and not the second.
@@ -71,40 +71,33 @@ Here is a description of your current task:
 
 
 class SpanAnnotationAgent(Agent):
-    def __init__(
-        self,
-        task_description,
-        *args,
-        model=None,
-        tools=None,
-        system_prompt=None,
-        max_steps=3,
-        **kwargs,
-    ):
-        """Init agent."""
-        model = model or "gemini/gemini-2.5-flash"
-        tools = tools or [SpanAnnotationTool]
-        system_prompt = system_prompt or SYSTEM_TEMPLATE.format(
+    """Agent for extracting spans from text."""
+
+    default_model = "gemini/gemini-2.5-flash"
+    default_tools = [SpanAnnotationTool]
+    default_max_steps = 3
+    default_completion_args = {}
+    on_init_args = ["task_description"]
+
+    def on_init(self, task_description):
+        """Prepare the system prompt based on the task description."""
+        system_prompt = SYSTEM_TEMPLATE.format(
             task_description=task_description
         )
-        super().__init__(
-            *args,
-            model=model,
-            tools=tools,
-            system_prompt=system_prompt,
-            max_steps=max_steps,
-            **kwargs,
-        )
+        self.messages = [
+            {"role": "system", "content": system_prompt},
+            *self.messages,
+        ]
 
     def __call__(self, text):
         """Call agent."""
         self.state["status"] = "success"
         self.state["text"] = text
-        self.step(text)
+        self.step(text, call_tools=True)
         for _ in range(2):
             if self.state["status"] == "success":
                 break
-            self.step("Please try again.")
+            self.step("Please try again.", call_tools=True)
         return {
             "status": self.state["status"],
             "spans": self.state.get("spans", []),
