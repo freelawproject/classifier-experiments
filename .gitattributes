@@ -26,3 +26,5 @@
 *.pdf binary
 *.xls binary
 *.wpd binary
+
+events.out.tfevents.* -text
