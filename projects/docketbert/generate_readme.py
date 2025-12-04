@@ -35,7 +35,7 @@ data["num_params_million"] = data["model"].apply(
     lambda x: None if "M" not in x else int(x.split("-")[-1][:-1])
 )
 data["eval_loss"] = data["model"].apply(load_eval_loss)
-data = data.sort_values("eval_loss")
+data = data.sort_values("eval_loss").reset_index(drop=True)
 readme_path = BASE_DIR.parent / "projects" / "docketbert" / "README.md"
 readme_template_path = readme_path.with_suffix(".template.md")
 template = readme_template_path.read_text()

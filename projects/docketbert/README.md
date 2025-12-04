@@ -34,27 +34,27 @@ We conducted tests to evaluate model throughput in an inference setting.
 
 |    | model                                                   |   100k_gpu_seconds |   200_cpu_seconds |   num_params_million |   eval_loss |
 |---:|:--------------------------------------------------------|-------------------:|------------------:|---------------------:|------------:|
-| 19 | docketbert-large-395M                                   |             81.054 |           175.448 |                  395 |    0.735635 |
-| 20 | docketbert-large-(lr:2e-4)-395M                         |             81.07  |           178.15  |                  395 |    0.751795 |
-| 14 | docketbert-sliced-large-ft-interleaved-10l-175M         |             40.64  |            53.647 |                  175 |    0.794689 |
-|  8 | docketbert-distill-sliced-large-ft-interleaved-10l-175M |             38.226 |            54.568 |                  175 |    0.797992 |
-| 18 | docketbert-base-150M                                    |             46.325 |            68.642 |                  150 |    0.814995 |
-| 12 | docketbert-sliced-large-ft-interleaved-8l-150M          |             38.978 |            52.307 |                  150 |    0.839114 |
-| 13 | docketbert-distill-sliced-large-ft-interleaved-8l-150M  |             39.848 |            46.144 |                  150 |    0.842217 |
-| 17 | docketbert-sliced-large-interleaved-10l-175M            |             43.083 |            52.033 |                  175 |    0.864428 |
-| 10 | docketbert-distill-sliced-large-interleaved-10l-175M    |             38.882 |            53.75  |                  175 |    0.869478 |
-|  6 | docketbert-sliced-large-ft-interleaved-6l-126M          |             37.338 |            36.69  |                  126 |    0.895777 |
-|  7 | docketbert-sliced-large-ft-first-6l-126M                |             37.472 |            31.121 |                  126 |    0.927982 |
-|  4 | docketbert-sliced-large-interleaved-6l-126M             |             37.022 |            33.435 |                  126 |    0.942992 |
-|  5 | docketbert-sliced-large-first-6l-126M                   |             37.098 |            32.831 |                  126 |    0.945664 |
-|  9 | docketbert-distill-base-41M                             |             38.541 |            15.245 |                   41 |    1.11082  |
-| 11 | docketbert-scratch-41M                                  |             38.953 |            15.113 |                   41 |    1.1354   |
-|  1 | docketbert-sliced-base-interleaved-4l-59M               |             35.057 |            12.987 |                   59 |    1.14059  |
-|  0 | docketbert-sliced-base-first-4l-59M                     |             34.656 |            14.506 |                   59 |    1.14098  |
-| 15 | docketbert-distill-base-27M                             |             41.383 |            16.835 |                   27 |    1.18661  |
-| 16 | docketbert-scratch-27M                                  |             42.565 |            16.45  |                   27 |    1.19237  |
-|  3 | docketbert-scratch-16M                                  |             36.296 |             4.449 |                   16 |    1.3754   |
-|  2 | docketbert-scratch-7M                                   |             35.633 |             3.177 |                    7 |    1.73775  |
+|  0 | docketbert-large-395M                                   |             81.054 |           175.448 |                  395 |    0.735635 |
+|  1 | docketbert-large-(lr:2e-4)-395M                         |             81.07  |           178.15  |                  395 |    0.751795 |
+|  2 | docketbert-sliced-large-ft-interleaved-10l-175M         |             40.64  |            53.647 |                  175 |    0.794689 |
+|  3 | docketbert-distill-sliced-large-ft-interleaved-10l-175M |             38.226 |            54.568 |                  175 |    0.797992 |
+|  4 | docketbert-base-150M                                    |             46.325 |            68.642 |                  150 |    0.814995 |
+|  5 | docketbert-sliced-large-ft-interleaved-8l-150M          |             38.978 |            52.307 |                  150 |    0.839114 |
+|  6 | docketbert-distill-sliced-large-ft-interleaved-8l-150M  |             39.848 |            46.144 |                  150 |    0.842217 |
+|  7 | docketbert-sliced-large-interleaved-10l-175M            |             43.083 |            52.033 |                  175 |    0.864428 |
+|  8 | docketbert-distill-sliced-large-interleaved-10l-175M    |             38.882 |            53.75  |                  175 |    0.869478 |
+|  9 | docketbert-sliced-large-ft-interleaved-6l-126M          |             37.338 |            36.69  |                  126 |    0.895777 |
+| 10 | docketbert-sliced-large-ft-first-6l-126M                |             37.472 |            31.121 |                  126 |    0.927982 |
+| 11 | docketbert-sliced-large-interleaved-6l-126M             |             37.022 |            33.435 |                  126 |    0.942992 |
+| 12 | docketbert-sliced-large-first-6l-126M                   |             37.098 |            32.831 |                  126 |    0.945664 |
+| 13 | docketbert-distill-base-41M                             |             38.541 |            15.245 |                   41 |    1.11082  |
+| 14 | docketbert-scratch-41M                                  |             38.953 |            15.113 |                   41 |    1.1354   |
+| 15 | docketbert-sliced-base-interleaved-4l-59M               |             35.057 |            12.987 |                   59 |    1.14059  |
+| 16 | docketbert-sliced-base-first-4l-59M                     |             34.656 |            14.506 |                   59 |    1.14098  |
+| 17 | docketbert-distill-base-27M                             |             41.383 |            16.835 |                   27 |    1.18661  |
+| 18 | docketbert-scratch-27M                                  |             42.565 |            16.45  |                   27 |    1.19237  |
+| 19 | docketbert-scratch-16M                                  |             36.296 |             4.449 |                   16 |    1.3754   |
+| 20 | docketbert-scratch-7M                                   |             35.633 |             3.177 |                    7 |    1.73775  |
 | 21 | microsoft/deberta-v3-large                              |            481.898 |           171.154 |                  nan |  nan        |
 
 ### Takeaways
