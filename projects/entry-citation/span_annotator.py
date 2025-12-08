@@ -23,18 +23,18 @@ class SpanAnnotationTool(Tool):
         text = agent.state["text"]
         spans = []
         for span in self.spans:
+            error_message = None
             if span.context_string not in text:
-                agent.state["status"] = "error"
-                return f"Error: Context string {span.context_string} not an exact substring of text."
+                error_message = f"Error: Context string {span.context_string} not an exact substring of text."
             elif text.count(span.context_string) != 1:
-                agent.state["status"] = "error"
-                return f"Error: Context string {span.context_string} is not unique in text."
+                error_message = f"Error: Context string {span.context_string} is not unique in text."
             elif span.extracted_text not in span.context_string:
-                agent.state["status"] = "error"
-                return f"Error: Extracted text '{span.extracted_text}' not an exact substring of context string '{span.context_string}'."
+                error_message = f"Error: Extracted text '{span.extracted_text}' not an exact substring of context string '{span.context_string}'."
             elif span.context_string.count(span.extracted_text) != 1:
+                error_message = f"Error: Extracted text '{span.extracted_text}' is not unique in context string '{span.context_string}'."
+            if error_message is not None:
                 agent.state["status"] = "error"
-                return f"Error: Extracted text '{span.extracted_text}' is not unique in context string '{span.context_string}'."
+                return error_message
 
             start = text.index(
                 span.context_string
@@ -73,10 +73,9 @@ Here is a description of your current task:
 class SpanAnnotationAgent(Agent):
     """Agent for extracting spans from text."""
 
-    default_model = "gemini/gemini-2.5-flash"
+    default_model = "openai/gpt-5-mini"
     default_tools = [SpanAnnotationTool]
     default_max_steps = 3
-    default_completion_args = {}
     on_init_args = ["task_description"]
 
     def on_init(self, task_description):
@@ -86,7 +85,6 @@ class SpanAnnotationAgent(Agent):
         )
         self.messages = [
             {"role": "system", "content": system_prompt},
-            *self.messages,
         ]
 
     def __call__(self, text):
@@ -109,7 +107,7 @@ class SpanAnnotationAgent(Agent):
 
         def job(text):
             try:
-                agent = cls(task_description, **kwargs)
+                agent = cls(task_description=task_description, **kwargs)
                 return agent(text)
             except Exception as e:
                 return {
