@@ -15,7 +15,7 @@ from .training_run import TrainingRun
 class TokenClassificationRun(TrainingRun):
     """Token classification run."""
 
-    task = "multi-label-classification"
+    task = "token-classification"
     add_config_attrs: ClassVar[list[str]] = ["label_names"]
 
     def __init__(self, label_names: list[str], *args, **kwargs):

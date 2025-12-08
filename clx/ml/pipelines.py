@@ -101,3 +101,29 @@ class MultiLabelClassificationPipeline(ClassificationPipeline):
             return {x["label"]: x["score"] for x in prediction}
         else:
             return [x["label"] for x in prediction if x["score"] > 0.5]
+
+
+class TokenClassificationPipeline(Pipeline):
+    """Token classification pipeline."""
+
+    task = "token-classification"
+    default_pipeline_args: ClassVar[dict] = {
+        "task": "ner",
+        "aggregation_strategy": "simple",
+    }
+
+    def post_process_prediction(self, prediction: list[dict]) -> list[dict]:
+        """Post-process a prediction."""
+        for span in prediction:
+            span["label"] = span.pop("entity_group")
+            span["text"] = span.pop("word")
+            if span["text"].startswith(" "):
+                span["text"] = span["text"][1:]
+                span["start"] += 1
+        return prediction
+
+
+class NERPipeline(TokenClassificationPipeline):
+    """Alias for token classification pipeline."""
+
+    task = "ner"
