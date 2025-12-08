@@ -7,8 +7,10 @@ from .multi_label_classification_run import MultiLabelClassificationRun
 from .pipelines import (
     ClassificationPipeline,
     MultiLabelClassificationPipeline,
+    NERPipeline,
     Pipeline,
     TextClassificationPipeline,
+    TokenClassificationPipeline,
 )
 from .token_classification_run import NERRun, TokenClassificationRun
 from .training_run import TrainingRun
@@ -47,6 +49,8 @@ pipeline_registry = [
     ClassificationPipeline,
     TextClassificationPipeline,
     MultiLabelClassificationPipeline,
+    TokenClassificationPipeline,
+    NERPipeline,
 ]
 
 
