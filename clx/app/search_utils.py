@@ -1,3 +1,4 @@
+import ast
 import csv
 import random
 from io import StringIO
@@ -9,10 +10,13 @@ from django.contrib.postgres.indexes import GinIndex
 from django.db import connection, models, transaction
 from django.db.models import Q
 from django.utils import timezone
+from pgvector.django import VectorField
 from postgres_copy import CopyManager, CopyQuerySet
 from pydantic import BaseModel as PydanticModel
 
-from clx.utils import generate_hash
+from clx import generate_hash, pd_save_or_append
+from clx.llm import batch_embed
+from clx.settings import DATA_DIR
 
 
 # Pydantic Models
@@ -202,6 +206,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
     text_prefix = models.CharField(max_length=50)
     text_hash = models.CharField(max_length=255)
     shuffle_sort = models.IntegerField()
+    embedding = VectorField(dimensions=96)
 
     objects = SearchManager()
 
@@ -372,6 +377,43 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         data["shuffle_sort"] = data["text_hash"].apply(
             lambda x: random.randint(0, 100000000)
         )
+        embeddings = []
+        emb_cache_path = (
+            DATA_DIR / "search_embeddings" / f"{cls.project_id}.csv"
+        )
+        emb_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        if emb_cache_path.exists():
+            for chunk in pd.read_csv(emb_cache_path, chunksize=1000000):
+                chunk = chunk[chunk["text_hash"].isin(data["text_hash"])]
+                if len(chunk) > 0:
+                    chunk["embedding"] = chunk["embedding"].apply(
+                        ast.literal_eval
+                    )
+                    embeddings.append(chunk)
+        needs_embeddings = (
+            data[["text_hash", "text"]]
+            .copy()
+            .drop_duplicates(subset=["text_hash"])
+        )
+        if len(embeddings) > 0:
+            embeddings = pd.concat(embeddings)
+            needs_embeddings = needs_embeddings[
+                ~needs_embeddings["text_hash"].isin(embeddings["text_hash"])
+            ]
+        if len(needs_embeddings) > 0:
+            needs_embeddings["embedding"] = batch_embed(
+                needs_embeddings["text"].tolist(),
+                num_workers=16,
+                dimensions=96,
+            )
+            needs_embeddings = needs_embeddings[["text_hash", "embedding"]]
+            pd_save_or_append(needs_embeddings, emb_cache_path)
+            embeddings = (
+                needs_embeddings
+                if len(embeddings) == 0
+                else pd.concat([embeddings, needs_embeddings])
+            )
+        data = data.merge(embeddings, on="text_hash", how="left")
         f = StringIO()
         data.to_csv(f, index=False)
         f.seek(0)
