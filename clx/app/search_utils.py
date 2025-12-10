@@ -190,29 +190,34 @@ class SearchDocumentModelBase(models.base.ModelBase):
 
     def __new__(cls, name, bases, attrs, **kwargs):
         """Create a new search document model."""
-        new_cls = super().__new__(cls, name, bases, attrs, **kwargs)
-        if not new_cls._meta.abstract:
-            if new_cls.project_id is None:
-                raise ValueError(
-                    f"{new_cls.__name__} must define a project_id"
-                )
-            new_cls._meta.indexes = [
-                models.Index(
-                    fields=["shuffle_sort", "id"],
-                    name=f"{new_cls.project_id}_s_idx",
-                ),
-                models.Index(
-                    fields=["text_prefix"],
-                    name=f"{new_cls.project_id}_pr_idx",
-                    opclasses=["text_pattern_ops"],
-                ),
-                GinIndex(
-                    fields=["text"],
-                    name=f"{new_cls.project_id}_trg_idx",
-                    opclasses=["gin_trgm_ops"],
-                ),
-            ]
-        return new_cls
+        if "Meta" not in attrs:
+            project_id = attrs.get("project_id")
+            if project_id is None:
+                raise ValueError(f"{name} must define a project_id")
+            attrs["Meta"] = type(
+                "Meta",
+                (),
+                {
+                    "db_table": f"project_{project_id}_doc",
+                    "indexes": [
+                        models.Index(
+                            fields=["shuffle_sort", "id"],
+                            name=f"{project_id}_s_idx",
+                        ),
+                        models.Index(
+                            fields=["text_prefix"],
+                            name=f"{project_id}_pr_idx",
+                            opclasses=["text_pattern_ops"],
+                        ),
+                        GinIndex(
+                            fields=["text"],
+                            name=f"{project_id}_trg_idx",
+                            opclasses=["gin_trgm_ops"],
+                        ),
+                    ],
+                },
+            )
+        return super().__new__(cls, name, bases, attrs, **kwargs)
 
 
 class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
@@ -269,11 +274,11 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
                 "Meta",
                 (),
                 {
-                    "db_table": f"{cls._meta.db_table}_tags",
+                    "db_table": f"project_{cls.project_id}_tags",
                     "indexes": [
                         GinIndex(
                             fields=["tags"],
-                            name=f"{cls._meta.db_table}_t_gin",
+                            name=f"{cls.project_id}_t_gin",
                         ),
                     ],
                 },
@@ -319,7 +324,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
 
             cur.execute(
                 f"""
-                UPDATE {tags_table} t
+                UPDATE "{tags_table}" t
                 SET tags = array_cat(t.tags, ARRAY[%s]::bigint[])
                 FROM stage_tag_ids s
                 WHERE t.id = s.example_id
@@ -331,7 +336,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
 
             cur.execute(
                 f"""
-                UPDATE {tags_table} t
+                UPDATE "{tags_table}" t
                 SET tags = array_remove(t.tags, %s)
                 WHERE t.tags @> ARRAY[%s]::bigint[]
                     AND NOT EXISTS (
