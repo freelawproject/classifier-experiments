@@ -16,7 +16,6 @@ from pydantic import BaseModel as PydanticModel
 
 from clx import generate_hash, pd_save_or_append
 from clx.llm import batch_embed
-from clx.settings import DATA_DIR
 
 
 # Pydantic Models
@@ -402,12 +401,10 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
             lambda x: random.randint(0, 100000000)
         )
         embeddings = []
-        emb_cache_path = (
-            DATA_DIR / "search_embeddings" / f"{cls.project_id}.csv"
-        )
-        emb_cache_path.parent.mkdir(parents=True, exist_ok=True)
-        if emb_cache_path.exists():
-            for chunk in pd.read_csv(emb_cache_path, chunksize=1000000):
+        embeddings_path = cls.get_project().cached_embeddings_path
+        embeddings_path.parent.mkdir(parents=True, exist_ok=True)
+        if embeddings_path.exists():
+            for chunk in pd.read_csv(embeddings_path, chunksize=1000000):
                 chunk = chunk[chunk["text_hash"].isin(data["text_hash"])]
                 if len(chunk) > 0:
                     chunk["embedding"] = chunk["embedding"].apply(
@@ -431,7 +428,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
                 dimensions=96,
             )
             needs_embeddings = needs_embeddings[["text_hash", "embedding"]]
-            pd_save_or_append(needs_embeddings, emb_cache_path)
+            pd_save_or_append(needs_embeddings, embeddings_path)
             embeddings = (
                 needs_embeddings
                 if len(embeddings) == 0
