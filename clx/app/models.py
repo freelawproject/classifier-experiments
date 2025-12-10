@@ -6,6 +6,7 @@ from django.utils import timezone
 from tqdm import tqdm
 
 from clx.llm import GEPAPredictor, SingleLabelPredictor
+from clx.settings import CLX_HOME
 
 from .custom_heuristics import custom_heuristics
 from .search_utils import BaseModel, SearchDocumentModel
@@ -19,6 +20,18 @@ class Project(BaseModel):
     model_name = models.CharField(max_length=255, unique=True)
     tags_model_name = models.CharField(max_length=255, null=True, blank=True)
     instructions = models.TextField(null=True, blank=True)
+
+    @property
+    def data_dir(self):
+        return CLX_HOME / "app_projects" / self.id
+
+    @property
+    def cached_documents_path(self):
+        return self.data_dir / "docs.csv"
+
+    @property
+    def cached_embeddings_path(self):
+        return self.data_dir / "embeddings.csv"
 
     def get_search_model(self):
         """Get the search model class for the project."""
