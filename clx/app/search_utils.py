@@ -10,7 +10,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.db import connection, models, transaction
 from django.db.models import Q
 from django.utils import timezone
-from pgvector.django import VectorField
+from pgvector.django import CosineDistance, VectorField
 from postgres_copy import CopyManager, CopyQuerySet
 from pydantic import BaseModel as PydanticModel
 
@@ -35,6 +35,7 @@ class SearchParams(PydanticModel):
 class SearchQuery(PydanticModel):
     params: SearchParams = SearchParams()
     sort: list[str] = ["shuffle_sort", "id"]
+    semantic_sort: str | list[float] | None = None
     page: int = 1
     page_size: int = 100
     count: bool = False
@@ -107,6 +108,21 @@ class SearchQuerySet(CopyQuerySet):
             self = self.exclude(example_tags__tags__contains=params["not_all"])
         return self
 
+    def semantic_sort(self, value):
+        """Apply a semantic sort to the query."""
+        if isinstance(value, str):
+            value = batch_embed([value], dimensions=96)[0]
+        assert isinstance(value, list), (
+            "Semantic sort must be a string or list"
+        )
+        assert len(value) == 96, "Semantic sort must be a list of 96 floats"
+        assert all(isinstance(v, float) for v in value), (
+            "Semantic sort must be a list of floats"
+        )
+        return self.annotate(
+            distance=CosineDistance("embedding", value)
+        ).order_by("distance")
+
     def search(self, **query):
         """Search with params, pagination, and sorting."""
         # Prepare query
@@ -131,7 +147,10 @@ class SearchQuerySet(CopyQuerySet):
             return {"total": self.count()}
 
         # Apply sorting
-        self = self.order_by(*query["sort"])
+        if query.get("semantic_sort"):
+            self = self.semantic_sort(query["semantic_sort"])
+        else:
+            self = self.order_by(*query["sort"])
 
         # Select columns
         cols = ["id", "text_hash", "text", "tags"]
