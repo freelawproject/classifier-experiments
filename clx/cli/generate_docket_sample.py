@@ -300,7 +300,7 @@ def parse_attachments(text):
     return text, attachments
 
 
-def import_docket_sample(batch_size=200000):
+def import_docket_sample(batch_size=10000):
     from clx.models import DocketEntry, DocketEntryShort
 
     total_entries = pd.read_csv(SAMPLE_INDEX_PATH)["num_documents"].sum()
@@ -388,13 +388,16 @@ def import_docket_sample(batch_size=200000):
                 DocketEntry.bulk_insert(data, ignore_conflicts=True)
     # Push shorts to the database and update counts
     shorts["count"] = shorts["count"].fillna(0).astype(int)
-    DocketEntryShort.bulk_insert(shorts, ignore_conflicts=True)
-    DocketEntryShort.bulk_update_column(
-        "count",
-        shorts["text"].tolist(),
-        shorts["count"].tolist(),
-        id_column="text",
-    )
+    DocketEntryShort.objects.all().delete()
+    shorts = shorts.to_dict(orient="records")
+    batches = [
+        shorts[i : i + batch_size] for i in range(0, len(shorts), batch_size)
+    ]
+    for batch in tqdm(batches, desc="Pushing shorts to the database"):
+        batch = pd.DataFrame(batch)
+        DocketEntryShort.bulk_insert(batch, ignore_conflicts=True)
+    DocketEntry.get_project().guarantee_tags_rows()
+    DocketEntryShort.get_project().guarantee_tags_rows()
 
 
 @click.command()
