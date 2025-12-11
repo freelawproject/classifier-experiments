@@ -1,11 +1,13 @@
+import json
+
+import lmdb
 import pandas as pd
 from django.apps import apps
 from django.db import models
-from django.db.models import JSONField
 from django.utils import timezone
 from tqdm import tqdm
 
-from clx.llm import GEPAPredictor, SingleLabelPredictor
+from clx.llm import GEPAPredictor, SingleLabelPredictor, batch_embed
 from clx.settings import CLX_HOME
 
 from .custom_heuristics import custom_heuristics
@@ -31,7 +33,37 @@ class Project(BaseModel):
 
     @property
     def cached_embeddings_path(self):
-        return self.data_dir / "embeddings.csv"
+        return self.data_dir / "embeddings.lmdb"
+
+    def load_or_add_embeddings(self, data):
+        assert all(x in data.columns for x in ["text_hash", "text"])
+        db = lmdb.open(str(self.cached_embeddings_path), map_size=1024**4)
+        with db.begin() as c:
+            data["embedding"] = data["text_hash"].apply(
+                lambda x: c.get(x.encode("utf-8"))
+            )
+            data["embedding"] = data["embedding"].apply(
+                lambda x: json.loads(x) if x is not None else None
+            )
+        needs_embeddings = data[data["embedding"].isna()]
+        data = data[data["embedding"].notna()]
+        needs_embeddings["embedding"] = batch_embed(
+            needs_embeddings["text"].tolist(),
+            num_workers=16,
+            dimensions=96,
+        )
+        with db.begin(write=True) as c:
+            for row in needs_embeddings.to_dict("records"):
+                c.put(
+                    row["text_hash"].encode("utf-8"),
+                    json.dumps(row["embedding"]).encode("utf-8"),
+                )
+        data = pd.concat([data, needs_embeddings])
+        return data
+
+    @property
+    def cached_documents(self):
+        return pd.read_csv(self.cached_documents_path)
 
     def get_search_model(self):
         """Get the search model class for the project."""
@@ -55,16 +87,19 @@ class Label(BaseModel):
 
     # Predictor config
     llm_models = [
+        ("GPT-5 Mini", "openai/gpt-5-mini"),
+        ("GPT-5", "openai/gpt-5"),
         ("Gemini 2.5 Flash Lite", "gemini/gemini-2.5-flash-lite"),
-        ("Qwen 235B-A22B", "bedrock/qwen.qwen3-235b-a22b-2507-v1:0"),
+        ("Gemini 2.5 Flash", "gemini/gemini-2.5-flash"),
         ("Gemini 2.5 Pro", "gemini/gemini-2.5-pro"),
+        ("Qwen 235B-A22B", "bedrock/qwen.qwen3-235b-a22b-2507-v1:0"),
         (
             "Claude Sonnet 4.5",
             "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         ),
     ]
-    default_inference_model = "gemini/gemini-2.5-flash-lite"
-    default_teacher_model = "gemini/gemini-2.5-pro"
+    default_inference_model = "openai/gpt-5-mini"
+    default_teacher_model = "openai/gpt-5"
     instructions = models.TextField(null=True, blank=True)
     inference_model = models.CharField(
         max_length=255,
@@ -76,7 +111,7 @@ class Label(BaseModel):
         choices=llm_models,
         default=default_teacher_model,
     )
-    predictor_data = JSONField(null=True, blank=True)
+    predictor_data = models.JSONField(null=True, blank=True)
     predictor_updated_at = models.DateTimeField(null=True, blank=True)
 
     # Trainset config
@@ -186,6 +221,7 @@ class Label(BaseModel):
         preds = predictor.predict(
             trainset["text"].tolist(), num_threads=num_threads
         )
+        print(predictor.last_cost)
         trainset["pred"] = [x.value for x in preds]
         trainset["reason"] = [x.reason for x in preds]
         examples = self.trainset_examples.all()
@@ -311,6 +347,7 @@ class Label(BaseModel):
         self.predictor_data = predictor.config
         self.predictor_updated_at = timezone.now()
         self.save()
+        print(predictor.last_cost)
 
     class Meta:
         unique_together = ("project", "name")
