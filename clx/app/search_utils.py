@@ -1,4 +1,3 @@
-import ast
 import csv
 import random
 from io import StringIO
@@ -10,11 +9,11 @@ from django.contrib.postgres.indexes import GinIndex
 from django.db import connection, models, transaction
 from django.db.models import Q
 from django.utils import timezone
-from pgvector.django import CosineDistance, VectorField
+from pgvector.django import CosineDistance, HalfVectorField, HnswIndex
 from postgres_copy import CopyManager, CopyQuerySet
 from pydantic import BaseModel as PydanticModel
 
-from clx import generate_hash, pd_save_or_append
+from clx import generate_hash
 from clx.llm import batch_embed
 
 
@@ -213,6 +212,13 @@ class SearchDocumentModelBase(models.base.ModelBase):
                             name=f"{project_id}_trg_idx",
                             opclasses=["gin_trgm_ops"],
                         ),
+                        HnswIndex(
+                            name=f"{project_id}_hnsw_idx",
+                            fields=["embedding"],
+                            m=16,
+                            ef_construction=64,
+                            opclasses=["halfvec_cosine_ops"],
+                        ),
                     ],
                 },
             )
@@ -229,7 +235,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
     text_prefix = models.CharField(max_length=50)
     text_hash = models.CharField(max_length=255)
     shuffle_sort = models.IntegerField()
-    embedding = VectorField(dimensions=96)
+    embedding = HalfVectorField(dimensions=96)
 
     objects = SearchManager()
 
@@ -374,7 +380,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
             )
             cur.execute(
                 f"""
-                UPDATE {table} t
+                UPDATE "{table}" t
                 SET {column} =
                     CASE WHEN s.val = '' THEN NULL ELSE s.val::{field_type} END
                 FROM stage_updates s
@@ -400,40 +406,12 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         data["shuffle_sort"] = data["text_hash"].apply(
             lambda x: random.randint(0, 100000000)
         )
-        embeddings = []
-        embeddings_path = cls.get_project().cached_embeddings_path
-        embeddings_path.parent.mkdir(parents=True, exist_ok=True)
-        if embeddings_path.exists():
-            for chunk in pd.read_csv(embeddings_path, chunksize=1000000):
-                chunk = chunk[chunk["text_hash"].isin(data["text_hash"])]
-                if len(chunk) > 0:
-                    chunk["embedding"] = chunk["embedding"].apply(
-                        ast.literal_eval
-                    )
-                    embeddings.append(chunk)
-        needs_embeddings = (
-            data[["text_hash", "text"]]
-            .copy()
-            .drop_duplicates(subset=["text_hash"])
-        )
-        if len(embeddings) > 0:
-            embeddings = pd.concat(embeddings)
-            needs_embeddings = needs_embeddings[
-                ~needs_embeddings["text_hash"].isin(embeddings["text_hash"])
-            ]
-        if len(needs_embeddings) > 0:
-            needs_embeddings["embedding"] = batch_embed(
-                needs_embeddings["text"].tolist(),
-                num_workers=16,
-                dimensions=96,
-            )
-            needs_embeddings = needs_embeddings[["text_hash", "embedding"]]
-            pd_save_or_append(needs_embeddings, embeddings_path)
-            embeddings = (
-                needs_embeddings
-                if len(embeddings) == 0
-                else pd.concat([embeddings, needs_embeddings])
-            )
+        embeddings = data.copy().drop_duplicates(subset=["text_hash"])[
+            ["text_hash", "text"]
+        ]
+        embeddings = cls.get_project().load_or_add_embeddings(embeddings)[
+            ["text_hash", "embedding"]
+        ]
         data = data.merge(embeddings, on="text_hash", how="left")
         f = StringIO()
         data.to_csv(f, index=False)
