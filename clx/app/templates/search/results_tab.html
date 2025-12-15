@@ -17,13 +17,49 @@
                             x-show="decisionForTextHash(result.text_hash);"
                             @click="goToDecisionByHash(result.text_hash)"
                         >Decision</button>
+                        <div
+                            x-data="{ annotating: false }"
+                            class="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-1 text-sm"
+                        >
+                            <button
+                                type="button"
+                                class="rounded-full disabled:opacity-50"
+                                :disabled="annotating || !activeLabelId"
+                                @click="annotating=true; await annotate(result.id, 'true', result); annotating=false;"
+                            >
+                                <i class="fa-circle-check"
+                                    :class="exampleActiveAnnotation(result) === 'true' ? 'fa-solid text-green-600' : 'fa-regular text-gray-500 hover:text-gray-700'"
+                                ></i>
+                            </button>
+                            <button
+                                type="button"
+                                class="rounded-full disabled:opacity-50"
+                                :disabled="annotating || !activeLabelId"
+                                @click="annotating=true; await annotate(result.id, 'false', result); annotating=false;"
+                            >
+                                <i class="fa-circle-xmark"
+                                    :class="exampleActiveAnnotation(result) === 'false' ? 'fa-solid text-red-600' : 'fa-regular text-gray-500 hover:text-gray-700'"
+                                ></i>
+                            </button>
+                            <button
+                                type="button"
+                                class="rounded-full disabled:opacity-50"
+                                :disabled="annotating || !activeLabelId"
+                                @click="annotating=true; await annotate(result.id, 'flag', result); annotating=false;"
+                            >
+                                <i
+                                    class="fa-circle-right"
+                                    :class="exampleActiveAnnotation(result) === 'flag' ? 'fa-solid text-amber-600' : 'fa-regular text-gray-500 hover:text-gray-700'"
+                                ></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <!-- Add decision form -->
                 <div class="my-3" x-show="showAddDecision" @click.outside="showAddDecision = false" x-cloak>
                     <div class="grid grid-cols-1 md:grid-cols-[1fr_12rem] gap-3 items-stretch">
                         <textarea
-                            class="w-full rounded-md ring-1 ring-gray-300 focus:ring-blue-500 text-sm p-2"
+                            class="w-full rounded-md bg-white ring-1 ring-gray-300 focus:ring-blue-500 text-sm p-2"
                             rows="2"
                             x-model="addReason"
                             placeholder="Enter reason…"
