@@ -50,7 +50,6 @@ class Agent:
         self,
         model: str = None,
         tools: list[Tool] | None = None,
-        system_prompt: str | None = None,
         messages: list[dict[str, str]] | None = None,
         state: dict | None = None,
         max_steps: int = None,
@@ -70,11 +69,6 @@ class Agent:
         self.tools = {tool.__name__: tool for tool in self.tools}
         self.tool_schemas = [tool.get_schema() for tool in self.tools.values()]
         self.messages = messages or self.default_messages
-        if system_prompt is not None:
-            self.messages = [
-                {"role": "system", "content": system_prompt},
-                *self.messages,
-            ]
         self.state = state or {}
         self.r = None
         self.max_steps = max_steps or self.default_max_steps
