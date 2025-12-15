@@ -7,6 +7,7 @@ from django.db import models
 from django.utils import timezone
 from tqdm import tqdm
 
+from clx import label2slug
 from clx.llm import GEPAPredictor, SingleLabelPredictor, batch_embed
 from clx.settings import CLX_HOME
 
@@ -418,11 +419,7 @@ class LabelTag(BaseModel):
     )
 
     def save(self, *args, **kwargs):
-        self.slug = (
-            self.name.lower().replace(" ", "_")
-            + ":"
-            + self.label.name.lower().replace(" ", "_")
-        )
+        self.slug = label2slug(self.name) + ":" + label2slug(self.label.name)
         super().save(*args, **kwargs)
 
     class Meta:

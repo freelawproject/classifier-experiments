@@ -26,6 +26,11 @@ def generate_hash(data):
     ).hexdigest()
 
 
+def label2slug(label_name):
+    """Convert a label name to a slug."""
+    return label_name.lower().replace(" ", "_").replace("/", "-")
+
+
 def pd_save_or_append(data: pd.DataFrame, path: str | Path):
     """Save or append pandas dataframe to csv file."""
     if path.exists():

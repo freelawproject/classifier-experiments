@@ -3,6 +3,7 @@ import pandas as pd
 from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification
 
+from clx import label2slug
 from clx.ml import pipeline
 from clx.settings import CLX_HOME
 from clx.utils import pd_save_or_append
@@ -55,7 +56,7 @@ def predict_scales(do_import):
         for scales_label, label_name in tqdm(
             scales2label.items(), desc="Predicting scales"
         ):
-            scales_path = SCALES_DIR / f"{label_name}.csv"
+            scales_path = SCALES_DIR / f"{label2slug(label_name)}.csv"
 
             data = all_data.copy()
             if scales_path.exists():
@@ -110,7 +111,9 @@ def predict_scales(do_import):
                 project=project, name=label_name
             )
             tag, _ = LabelTag.objects.get_or_create(label=label, name="scales")
-            scales_data = pd.read_csv(SCALES_DIR / f"{label_name}.csv")
+            scales_data = pd.read_csv(
+                SCALES_DIR / f"{label2slug(label_name)}.csv"
+            )
             text_hashes = list(
                 scales_data[scales_data["pred"] > 0.5]["text_hash"].unique()
             )

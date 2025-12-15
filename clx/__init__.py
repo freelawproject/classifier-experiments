@@ -17,6 +17,7 @@ from .utils import (
     extract_from_pattern,
     generate_hash,
     init_django,
+    label2slug,
     pd_save_or_append,
 )
 
@@ -24,6 +25,7 @@ __all__ = [
     "download_file",
     "extract_bz2_file",
     "init_django",
+    "label2slug",
     "pd_save_or_append",
     "extract_from_pattern",
     "extract_attachments",
