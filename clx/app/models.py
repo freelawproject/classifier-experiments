@@ -280,6 +280,30 @@ class Label(BaseModel):
         )
         return tag
 
+    @property
+    def anno_true_tag(self):
+        tag, _ = LabelTag.objects.get_or_create(
+            name="anno:true",
+            label=self,
+        )
+        return tag
+
+    @property
+    def anno_false_tag(self):
+        tag, _ = LabelTag.objects.get_or_create(
+            name="anno:false",
+            label=self,
+        )
+        return tag
+
+    @property
+    def anno_flag_tag(self):
+        tag, _ = LabelTag.objects.get_or_create(
+            name="anno:flag",
+            label=self,
+        )
+        return tag
+
     def sync_trainset_tags(self):
         """Sync tags for train/eval splits to match current trainset examples."""
         model = self.project.get_search_model()
@@ -452,7 +476,7 @@ class LabelHeuristic(BaseModel):
                 custom=custom_name,
             ).exists()
             if not heuristic_exists:
-                label = Label.objects.get(
+                label, _ = Label.objects.get_or_create(
                     name=custom_heuristic["label_name"],
                     project_id=custom_heuristic["project_id"],
                 )
