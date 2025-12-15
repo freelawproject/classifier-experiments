@@ -1,5 +1,7 @@
+from contextlib import nullcontext
 from typing import ClassVar
 
+import torch
 from datasets import Dataset
 from tqdm import tqdm
 from transformers import pipeline as hf_pipeline
@@ -10,14 +12,28 @@ class Pipeline:
     """Base class for all pipelines."""
 
     task: str | None = None
-    default_pipeline_args: dict = {}
-    default_predict_args: dict = {}
-    post_process_keys: list[str] = []
+    default_pipeline_args: ClassVar[dict] = {}
+    default_predict_args: ClassVar[dict] = {}
+    default_bf16: bool = False
+    default_fp16: bool = False
+    post_process_keys: ClassVar[list[str]] = []
 
-    def __init__(self, model: str | dict | None = None, **pipeline_args: dict):
+    def __init__(
+        self,
+        model: str | dict | None = None,
+        bf16: bool = False,
+        fp16: bool = False,
+        **pipeline_args: dict,
+    ):
         if self.task is None:
             raise NotImplementedError("`task` must be set.")
         self.model = model
+        self.bf16 = bf16 or self.default_bf16
+        self.fp16 = fp16 or self.default_fp16
+        if self.bf16 and self.fp16:
+            raise ValueError(
+                "`bf16` and `fp16` cannot be True at the same time."
+            )
         self.pipeline_args = {**self.default_pipeline_args, **pipeline_args}
         self._pipe = None
 
@@ -45,14 +61,23 @@ class Pipeline:
                 if k not in self.post_process_keys
             },
         }
-        for out in tqdm(
-            self.pipe(dataset, **predict_args),
-            desc="Predicting",
-            total=len(examples),
-        ):
-            preds.append(
-                self.post_process_prediction(out, **post_process_args)
-            )
+        device_type = self.pipe.model.device.type
+        autocast_context = (
+            torch.autocast(device_type, dtype=torch.bfloat16)
+            if self.bf16
+            else torch.autocast(device_type, dtype=torch.float16)
+            if self.fp16
+            else nullcontext()
+        )
+        with autocast_context, torch.inference_mode():
+            for out in tqdm(
+                self.pipe(dataset, **predict_args),
+                desc="Predicting",
+                total=len(examples),
+            ):
+                preds.append(
+                    self.post_process_prediction(out, **post_process_args)
+                )
         return preds
 
     def prepare_examples(self, examples: list) -> list:

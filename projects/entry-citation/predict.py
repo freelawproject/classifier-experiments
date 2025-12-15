@@ -8,14 +8,13 @@ if __name__ == "__main__":
 
     model_dir = PROJECT_DIR / "runs" / "entry-citation" / "model"
 
-    pipe = pipeline(
-        "ner",
-        model=model_dir,
-        tokenizer=(model_dir, {"max_length": 768, "truncation": True}),
-    )
+    pipe = pipeline("ner", model=model_dir)
     with torch.autocast(pipe.pipe.device.type, dtype=torch.bfloat16):
         eval_data["preds"] = pipe.predict(
-            eval_data["text"].tolist(), batch_size=32
+            eval_data["text"].tolist(),
+            batch_size=32,
+            max_length=768,
+            truncation=True,
         )
 
     for row in eval_data.to_dict("records"):
