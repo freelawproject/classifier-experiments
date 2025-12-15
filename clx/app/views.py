@@ -100,6 +100,21 @@ def tags_endpoint(request, project_id):
     return JsonResponse({"tags": tags})
 
 
+@csrf_exempt
+@require_POST
+def annotate_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    example_id = payload.get("example_id")
+    label_id = payload.get("label_id")
+    value = payload.get("value", None)
+    project = Project.objects.get(id=project_id)
+    model = project.get_search_model()
+    example = model.objects.get(id=example_id)
+    label = Label.objects.get(id=label_id, project_id=project_id)
+    example.set_annotation(label, value)
+    return JsonResponse({"ok": True})
+
+
 # Decision Endpoints
 @csrf_exempt
 @require_POST

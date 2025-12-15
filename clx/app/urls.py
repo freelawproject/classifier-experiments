@@ -38,6 +38,11 @@ urlpatterns = [
         name="tags-endpoint",
     ),
     path(
+        "api/project/<slug:project_id>/annotate/",
+        views.annotate_endpoint,
+        name="annotate-endpoint",
+    ),
+    path(
         "api/project/<slug:project_id>/decisions/",
         views.decisions_endpoint,
         name="decisions-endpoint",
