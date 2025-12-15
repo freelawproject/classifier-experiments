@@ -213,8 +213,8 @@ class SearchDocumentModelBase(models.base.ModelBase):
                             opclasses=["gin_trgm_ops"],
                         ),
                         HnswIndex(
-                            name=f"{project_id}_hnsw_idx",
                             fields=["embedding"],
+                            name=f"{project_id}_hnsw_idx",
                             m=16,
                             ef_construction=64,
                             opclasses=["halfvec_cosine_ops"],
@@ -425,6 +425,27 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
             **kwargs,
         )
         cls.guarantee_tags_rows()
+
+    def set_annotation(self, label, value):
+        """Set annotation tag for this example for the given label."""
+        if isinstance(value, bool):
+            value = "true" if value else "false"
+        assert value is None or value in ["true", "false", "flag"], (
+            "value must be 'true', 'false', 'flag', True, False, or None"
+        )
+
+        tags = self.example_tags
+        tag_ids = {
+            "true": label.anno_true_tag.id,
+            "false": label.anno_false_tag.id,
+            "flag": label.anno_flag_tag.id,
+        }
+        for tag_id in tag_ids.values():
+            if tag_id in tags.tags:
+                tags.tags.remove(tag_id)
+        if value in tag_ids:
+            tags.tags.append(tag_ids[value])
+        tags.save()
 
     class Meta:
         abstract = True
