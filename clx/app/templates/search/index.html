@@ -155,7 +155,7 @@
             </div>
 
             <!-- Right -->
-            <aside class="bg-white border rounded-lg shadow-sm my-4 p-4 overflow-hidden">
+            <aside class="bg-white border rounded-lg shadow-sm my-4 p-4 overflow-y-auto overflow-x-hidden">
                 <div class="mb-3" x-data="{ open: false }">
                     <div class="relative">
                         <button
@@ -188,8 +188,10 @@
                     </div>
                 </div>
                 <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(project, null, 2)"></pre>
-                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(labels[activeLabelId], null, 2)"></pre>
+                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(labels?.[activeLabelId] || '', null, 2)"></pre>
                 <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(jobs, null, 2)"></pre>
+                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(tags, null, 2)"></pre>
+                <pre class="text-sm text-gray-500 mb-2" x-text="JSON.stringify(annoTagIds, null, 2)"></pre>
             </aside>
         </div>
     </div>
@@ -224,34 +226,18 @@
                     inferenceModel: '{{ label_class.default_inference_model }}',
                     teacherModel: '{{ label_class.default_teacher_model }}',
                 },
+                annoTagIds: {
+                    "true": null,
+                    "false": null,
+                    "flag": null,
+                },
                 page: 1,
                 results: null,
                 total: null,
                 loading: false,
                 error: null,
                 jobs: {},
-                // Helpers
-                orderTagsByActiveLabel() {
-                    const allTags = Object.values(this.tags || {});
-                    if (!this.activeLabelId) {
-                        return {
-                            preferred: [],
-                            others: allTags.slice().sort((a, b) => a.slug.localeCompare(b.slug)),
-                        };
-                    }
-                    const preferred = [];
-                    const others = [];
-                    for (const t of allTags) {
-                        if (t.label_id === this.activeLabelId) {
-                            preferred.push(t);
-                        } else {
-                            others.push(t);
-                        }
-                    }
-                    preferred.sort((a, b) => a.slug.localeCompare(b.slug));
-                    others.sort((a, b) => a.slug.localeCompare(b.slug));
-                    return { preferred, others };
-                },
+                // UI Helpers
                 scrollToTop () {
                     if (this.$refs && this.$refs.resultsContainer) {
                         this.$refs.resultsContainer.scrollTo({ top: 0, behavior: 'smooth' });
@@ -297,7 +283,35 @@
                     delete this.jobs[jobId];
                 },
 
-                // Decision helpers
+                // Data helpers
+                orderTagsByActiveLabel() {
+                    const allTags = Object.values(this.tags || {});
+                    if (!this.activeLabelId) {
+                        return {
+                            preferred: [],
+                            others: allTags.slice().sort((a, b) => a.slug.localeCompare(b.slug)),
+                        };
+                    }
+                    const preferred = [];
+                    const others = [];
+                    for (const t of allTags) {
+                        if (t.label_id === this.activeLabelId) {
+                            preferred.push(t);
+                        } else {
+                            others.push(t);
+                        }
+                    }
+                    preferred.sort((a, b) => a.slug.localeCompare(b.slug));
+                    others.sort((a, b) => a.slug.localeCompare(b.slug));
+                    return { preferred, others };
+                },
+                getTagsByPrefix(prefix, useActiveLabel=false) {
+                    const prefixTags = Object.values(this.tags || {}).filter(t => t && (t.slug || '').startsWith(prefix + ':'));
+                    if (useActiveLabel) {
+                        return prefixTags.filter(t => t.label_id === this.activeLabelId);
+                    }
+                    return prefixTags;
+                },
                 decisionForTextHash(textHash) {
                     if (!textHash || !this.decisions) return null;
                     const items = Object.values(this.decisions || {});
@@ -435,6 +449,28 @@
                     const data = await this.apiFetch('tags/', { method: 'GET' });
                     if (!data) return;
                     this.tags = data.tags || {};
+                },
+                exampleActiveAnnotation(result) {
+                    if (!result) return null;
+                    const tags = result.tags || [];
+                    if (this.annoTagIds.true && tags.includes(this.annoTagIds.true)) return 'true';
+                    if (this.annoTagIds.false && tags.includes(this.annoTagIds.false)) return 'false';
+                    if (this.annoTagIds.flag && tags.includes(this.annoTagIds.flag)) return 'flag';
+                    return null;
+                },
+                async annotate(exampleId, value, result) {
+                    if (!exampleId || !this.activeLabelId) return;
+                    const current = this.exampleActiveAnnotation(result);
+                    const newValue = (current === value) ? null : value;
+                    result.tags = result.tags.filter(t => t !== this.annoTagIds.true && t !== this.annoTagIds.false && t !== this.annoTagIds.flag);
+                    if (newValue) {
+                        result.tags.push(this.annoTagIds[newValue]);
+                    }
+                    await this.apiFetch('annotate/', {
+                        method: 'POST',
+                        body: { example_id: exampleId, label_id: this.activeLabelId, value: newValue },
+                    });
+                    await this.getTags();
                 },
 
                 // Decisions
@@ -590,6 +626,9 @@
                     this.trainsetConfig.numLikely = this.labels?.[labelId]?.trainset_num_likely || 1000;
                     this.predictorConfig.inferenceModel = this.labels?.[labelId]?.inference_model || '{{ label_class.default_inference_model }}';
                     this.predictorConfig.teacherModel = this.labels?.[labelId]?.teacher_model || '{{ label_class.default_teacher_model }}';
+                    this.annoTagIds.true = this.getTagsByPrefix('anno:true', true).map(t => t.id).find(id => id !== null);
+                    this.annoTagIds.false = this.getTagsByPrefix('anno:false', true).map(t => t.id).find(id => id !== null);
+                    this.annoTagIds.flag = this.getTagsByPrefix('anno:flag', true).map(t => t.id).find(id => id !== null);
                 },
                 async init() {
                     await this.getProject();

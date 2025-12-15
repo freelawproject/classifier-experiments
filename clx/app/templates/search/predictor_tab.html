@@ -251,15 +251,15 @@
                             <button
                                 type="button"
                                 class="rounded-md px-2 py-0.5 text-xs bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                @click="newInstructions = project.instructions || ''; editing = !editing; if (editing) {autoExpand($refs.instructions); $nextTick(() => $refs.instructions.focus());}"
+                                @click="newInstructions = project?.instructions || ''; editing = !editing; if (editing) {autoExpand($refs.instructions); $nextTick(() => $refs.instructions.focus());}"
                             >
                                 Edit
                             </button>
                         </div>
                         <p class="text-xs text-gray-500 mb-1">Global, project-wide instructions for initializing the DSPy predictor that apply to all labels.</p>
                         <div class="mt-2 rounded-md border border-gray-200 bg-gray-50 p-3" x-show="!editing">
-                            <pre class="text-gray-800 text-sm whitespace-pre-wrap break-words" x-text="project.instructions || ''"></pre>
-                            <p class="text-gray-500 italic" x-show="!project.instructions">No project instructions yet.</p>
+                            <pre class="text-gray-800 text-sm whitespace-pre-wrap break-words" x-text="project?.instructions || ''"></pre>
+                            <p class="text-gray-500 italic" x-show="!project?.instructions">No project instructions yet.</p>
                         </div>
                         <div class="mt-2" x-show="editing" x-cloak>
                             <textarea x-ref="instructions" class="w-full rounded-md ring-1 ring-gray-300 focus:ring-blue-500 text-sm p-2" rows="3" x-model="newInstructions" placeholder="Enter instructions..." @input="autoExpand($el)"></textarea>
