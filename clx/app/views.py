@@ -25,13 +25,18 @@ def search_endpoint(request, project_id):
 @require_GET
 def project_endpoint(request, project_id):
     project = Project.objects.get(id=project_id)
-    print(project)
+    last_created_example = (
+        project.get_search_model().objects.order_by("-created_at").first()
+    )
     return JsonResponse(
         {
             "project": {
                 "id": project.id,
                 "name": project.name,
                 "instructions": project.instructions or "",
+                "last_example_created_at": last_created_example.created_at
+                if last_created_example
+                else None,
             }
         }
     )

@@ -55,6 +55,13 @@
         <template x-if="!(heuristics && Object.keys(heuristics || {}).length)">
             <div class="text-sm text-gray-500">No heuristics yet.</div>
         </template>
+        <template x-if="project?.last_example_created_at && lastHeuristicAppliedAt() ? new Date(project.last_example_created_at) > lastHeuristicAppliedAt() : false">
+            <div class="mb-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                <span>
+                    New examples have been added to this project since some heuristics were last applied. Please run <pre class="inline-block font-mono bg-gray-50 px-1 rounded">clx cleanup</pre> to update the heuristics.
+                </span>
+            </div>
+        </template>
         <div class="flex flex-col gap-4">
             <template
                 x-for="h in (Object.values(heuristics || {}).slice().sort((a,b) => new Date(b?.created_at) - new Date(a?.created_at)))"

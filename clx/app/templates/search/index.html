@@ -574,6 +574,9 @@
                     await this.getTags();
                     await this.getLabels();
                 },
+                lastHeuristicAppliedAt() {
+                    return this.heuristics && Object.values(this.heuristics).length ? Math.max(...Object.values(this.heuristics).map(h => new Date(h.applied_at))) : null;
+                },
 
                 // Predictor
                 async updateTrainset(labelId) {
