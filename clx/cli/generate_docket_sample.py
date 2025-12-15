@@ -14,21 +14,23 @@ from clx import (
     extract_bz2_file,
     pd_save_or_append,
 )
-from clx.settings import DATA_DIR
+from clx.settings import CLX_HOME
 
 BULK_DOCKETS_URL = os.getenv(
     "BULK_DOCKETS_URL",
     "https://storage.courtlistener.com/bulk-data/dockets-2025-10-31.csv.bz2",
 )
-BULK_DATA_ZIP_PATH = DATA_DIR / "docket_sample" / "recap_dockets.csv.bz2"
-BULK_DATA_PATH = DATA_DIR / "docket_sample" / "recap_dockets.csv"
+
+PROJECT_DIR = CLX_HOME / "app_projects" / "docket-entry"
+BULK_DATA_ZIP_PATH = PROJECT_DIR / "docket_sample" / "recap_dockets.csv.bz2"
+BULK_DATA_PATH = PROJECT_DIR / "docket_sample" / "recap_dockets.csv"
 COVERAGE_DATA_URL = "https://media.githubusercontent.com/media/freelawproject/classifier-experiments/refs/heads/data/home/data/docket_sample/document_coverage.csv"
-COVERAGE_DATA_PATH = DATA_DIR / "docket_sample" / "document_coverage.csv"
-REDUCED_DATA_PATH = DATA_DIR / "docket_sample" / "recap_dockets_reduced.csv"
+COVERAGE_DATA_PATH = PROJECT_DIR / "docket_sample" / "document_coverage.csv"
+REDUCED_DATA_PATH = PROJECT_DIR / "docket_sample" / "recap_dockets_reduced.csv"
 SAMPLE_INDEX_URL = "https://media.githubusercontent.com/media/freelawproject/classifier-experiments/refs/heads/data/home/data/docket_sample/docket_index.csv"
-SAMPLE_INDEX_PATH = DATA_DIR / "docket_sample" / "docket_index.csv"
+SAMPLE_INDEX_PATH = PROJECT_DIR / "docket_sample" / "docket_index.csv"
 DOCKET_SAMPLE_URL = ""
-DOCKET_SAMPLE_PATH = DATA_DIR / "docket_sample" / "docket_sample.csv"
+DOCKET_SAMPLE_PATH = PROJECT_DIR / "docket_sample" / "docket_data.csv"
 
 
 def get_crude_case_type(docket_number):
@@ -298,7 +300,7 @@ def parse_attachments(text):
     return text, attachments
 
 
-def import_docket_sample(batch_size=1000000):
+def import_docket_sample(batch_size=500000):
     from clx.models import DocketEntry, DocketEntryShort
 
     total_entries = pd.read_csv(SAMPLE_INDEX_PATH)["num_documents"].sum()
@@ -386,13 +388,15 @@ def import_docket_sample(batch_size=1000000):
                 DocketEntry.bulk_insert(data, ignore_conflicts=True)
     # Push shorts to the database and update counts
     shorts["count"] = shorts["count"].fillna(0).astype(int)
-    DocketEntryShort.bulk_insert(shorts, ignore_conflicts=True)
-    DocketEntryShort.bulk_update_column(
-        "count",
-        shorts["text"].tolist(),
-        shorts["count"].tolist(),
-        id_column="text",
-    )
+    shorts = shorts.to_dict(orient="records")
+    batches = [
+        shorts[i : i + batch_size] for i in range(0, len(shorts), batch_size)
+    ]
+    for batch in tqdm(batches, desc="Pushing shorts to the database"):
+        batch = pd.DataFrame(batch)
+        DocketEntryShort.bulk_insert(batch, ignore_conflicts=True)
+    DocketEntry.guarantee_tags_rows()
+    DocketEntryShort.guarantee_tags_rows()
 
 
 @click.command()

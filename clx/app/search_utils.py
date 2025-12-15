@@ -1,4 +1,3 @@
-import ast
 import csv
 import random
 from io import StringIO
@@ -10,13 +9,12 @@ from django.contrib.postgres.indexes import GinIndex
 from django.db import connection, models, transaction
 from django.db.models import Q
 from django.utils import timezone
-from pgvector.django import CosineDistance, VectorField
+from pgvector.django import CosineDistance, HalfVectorField, HnswIndex
 from postgres_copy import CopyManager, CopyQuerySet
 from pydantic import BaseModel as PydanticModel
 
-from clx import generate_hash, pd_save_or_append
+from clx import generate_hash
 from clx.llm import batch_embed
-from clx.settings import DATA_DIR
 
 
 # Pydantic Models
@@ -190,29 +188,41 @@ class SearchDocumentModelBase(models.base.ModelBase):
 
     def __new__(cls, name, bases, attrs, **kwargs):
         """Create a new search document model."""
-        new_cls = super().__new__(cls, name, bases, attrs, **kwargs)
-        if not new_cls._meta.abstract:
-            if new_cls.project_id is None:
-                raise ValueError(
-                    f"{new_cls.__name__} must define a project_id"
-                )
-            new_cls._meta.indexes = [
-                models.Index(
-                    fields=["shuffle_sort", "id"],
-                    name=f"{new_cls.project_id}_s_idx",
-                ),
-                models.Index(
-                    fields=["text_prefix"],
-                    name=f"{new_cls.project_id}_pr_idx",
-                    opclasses=["text_pattern_ops"],
-                ),
-                GinIndex(
-                    fields=["text"],
-                    name=f"{new_cls.project_id}_trg_idx",
-                    opclasses=["gin_trgm_ops"],
-                ),
-            ]
-        return new_cls
+        if "Meta" not in attrs:
+            project_id = attrs.get("project_id")
+            if project_id is None:
+                raise ValueError(f"{name} must define a project_id")
+            attrs["Meta"] = type(
+                "Meta",
+                (),
+                {
+                    "db_table": f"project_{project_id}_doc",
+                    "indexes": [
+                        models.Index(
+                            fields=["shuffle_sort", "id"],
+                            name=f"{project_id}_s_idx",
+                        ),
+                        models.Index(
+                            fields=["text_prefix"],
+                            name=f"{project_id}_pr_idx",
+                            opclasses=["text_pattern_ops"],
+                        ),
+                        GinIndex(
+                            fields=["text"],
+                            name=f"{project_id}_trg_idx",
+                            opclasses=["gin_trgm_ops"],
+                        ),
+                        HnswIndex(
+                            fields=["embedding"],
+                            name=f"{project_id}_hnsw_idx",
+                            m=16,
+                            ef_construction=64,
+                            opclasses=["halfvec_cosine_ops"],
+                        ),
+                    ],
+                },
+            )
+        return super().__new__(cls, name, bases, attrs, **kwargs)
 
 
 class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
@@ -225,7 +235,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
     text_prefix = models.CharField(max_length=50)
     text_hash = models.CharField(max_length=255)
     shuffle_sort = models.IntegerField()
-    embedding = VectorField(dimensions=96)
+    embedding = HalfVectorField(dimensions=96)
 
     objects = SearchManager()
 
@@ -269,11 +279,11 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
                 "Meta",
                 (),
                 {
-                    "db_table": f"{cls._meta.db_table}_tags",
+                    "db_table": f"project_{cls.project_id}_tags",
                     "indexes": [
                         GinIndex(
                             fields=["tags"],
-                            name=f"{cls._meta.db_table}_t_gin",
+                            name=f"{cls.project_id}_t_gin",
                         ),
                     ],
                 },
@@ -319,7 +329,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
 
             cur.execute(
                 f"""
-                UPDATE {tags_table} t
+                UPDATE "{tags_table}" t
                 SET tags = array_cat(t.tags, ARRAY[%s]::bigint[])
                 FROM stage_tag_ids s
                 WHERE t.id = s.example_id
@@ -331,7 +341,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
 
             cur.execute(
                 f"""
-                UPDATE {tags_table} t
+                UPDATE "{tags_table}" t
                 SET tags = array_remove(t.tags, %s)
                 WHERE t.tags @> ARRAY[%s]::bigint[]
                     AND NOT EXISTS (
@@ -370,7 +380,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
             )
             cur.execute(
                 f"""
-                UPDATE {table} t
+                UPDATE "{table}" t
                 SET {column} =
                     CASE WHEN s.val = '' THEN NULL ELSE s.val::{field_type} END
                 FROM stage_updates s
@@ -396,42 +406,12 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         data["shuffle_sort"] = data["text_hash"].apply(
             lambda x: random.randint(0, 100000000)
         )
-        embeddings = []
-        emb_cache_path = (
-            DATA_DIR / "search_embeddings" / f"{cls.project_id}.csv"
-        )
-        emb_cache_path.parent.mkdir(parents=True, exist_ok=True)
-        if emb_cache_path.exists():
-            for chunk in pd.read_csv(emb_cache_path, chunksize=1000000):
-                chunk = chunk[chunk["text_hash"].isin(data["text_hash"])]
-                if len(chunk) > 0:
-                    chunk["embedding"] = chunk["embedding"].apply(
-                        ast.literal_eval
-                    )
-                    embeddings.append(chunk)
-        needs_embeddings = (
-            data[["text_hash", "text"]]
-            .copy()
-            .drop_duplicates(subset=["text_hash"])
-        )
-        if len(embeddings) > 0:
-            embeddings = pd.concat(embeddings)
-            needs_embeddings = needs_embeddings[
-                ~needs_embeddings["text_hash"].isin(embeddings["text_hash"])
-            ]
-        if len(needs_embeddings) > 0:
-            needs_embeddings["embedding"] = batch_embed(
-                needs_embeddings["text"].tolist(),
-                num_workers=16,
-                dimensions=96,
-            )
-            needs_embeddings = needs_embeddings[["text_hash", "embedding"]]
-            pd_save_or_append(needs_embeddings, emb_cache_path)
-            embeddings = (
-                needs_embeddings
-                if len(embeddings) == 0
-                else pd.concat([embeddings, needs_embeddings])
-            )
+        embeddings = data.copy().drop_duplicates(subset=["text_hash"])[
+            ["text_hash", "text"]
+        ]
+        embeddings = cls.get_project().load_or_add_embeddings(embeddings)[
+            ["text_hash", "embedding"]
+        ]
         data = data.merge(embeddings, on="text_hash", how="left")
         f = StringIO()
         data.to_csv(f, index=False)
@@ -445,6 +425,27 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
             **kwargs,
         )
         cls.guarantee_tags_rows()
+
+    def set_annotation(self, label, value):
+        """Set annotation tag for this example for the given label."""
+        if isinstance(value, bool):
+            value = "true" if value else "false"
+        assert value is None or value in ["true", "false", "flag"], (
+            "value must be 'true', 'false', 'flag', True, False, or None"
+        )
+
+        tags = self.example_tags
+        tag_ids = {
+            "true": label.anno_true_tag.id,
+            "false": label.anno_false_tag.id,
+            "flag": label.anno_flag_tag.id,
+        }
+        for tag_id in tag_ids.values():
+            if tag_id in tags.tags:
+                tags.tags.remove(tag_id)
+        if value in tag_ids:
+            tags.tags.append(tag_ids[value])
+        tags.save()
 
     class Meta:
         abstract = True

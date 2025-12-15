@@ -41,6 +41,7 @@ dependencies = [
   "dspy>=3.0.3",
   "hf_transfer>=0.1.9",
   "litellm>=1.79.1",
+  "lmdb>=1.7.5",
   "pandas>=2.3.3",
   "pgvector>=0.4.2",
   "psycopg2-binary>=2.9.11",

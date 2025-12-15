@@ -6,9 +6,8 @@ import pandas as pd
 from transformers import AutoConfig, AutoModel
 
 from clx.ml import training_run
-from clx.settings import CLX_HOME, DATA_DIR
+from clx.settings import CLX_HOME
 
-DATASET_PATH = DATA_DIR / "search_datasets" / "docket-entry.csv"
 PROJECT_DIR = CLX_HOME / "projects" / "docketbert"
 
 
@@ -309,6 +308,8 @@ def train_docketbert(
     overwrite, resume, check_params, mem_test, experiment, batch_size, exit
 ):
     """Train a docket language model."""
+    from clx.models import DocketEntry
+
     try:
         if resume and overwrite:
             raise click.UsageError(
@@ -316,7 +317,7 @@ def train_docketbert(
             )
 
         data = pd.read_csv(
-            DATASET_PATH,
+            DocketEntry.get_project().cached_documents_path,
             usecols=["text"],
             nrows=200000 if mem_test else None,
         )
