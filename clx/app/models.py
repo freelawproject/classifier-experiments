@@ -212,10 +212,34 @@ class Label(BaseModel):
         self.save()
 
     def load_trainset(self):
-        # Add set value from pred + annos
-        return pd.DataFrame(self.trainset_examples.all().values())
+        data = pd.DataFrame(
+            self.trainset_examples.all().values(
+                "text_hash", "text", "split", "pred", "reason"
+            )
+        )
+        project = self.project
+        search_model = project.get_search_model()
+        pos_annos = search_model.objects.tags(
+            any=[self.anno_true_tag.id]
+        ).values("text_hash", "text")
+        pos_annos = pd.DataFrame(pos_annos)
+        pos_annos["split"], pos_annos["pred"] = "train", True
+        neg_annos = search_model.objects.tags(
+            any=[self.anno_false_tag.id]
+        ).values("text_hash", "text")
+        neg_annos = pd.DataFrame(neg_annos)
+        neg_annos["split"], neg_annos["pred"] = "train", False
+        data = pd.concat([data, pos_annos, neg_annos])
+        data = data.drop_duplicates(subset="text_hash", keep="last")
+        flag_hashes = search_model.objects.tags(
+            any=[self.anno_flag_tag.id]
+        ).values_list("text_hash", flat=True)
+        data = data[~data["text_hash"].isin(flag_hashes)]
+        data = data.sample(frac=1, random_state=42)
+        data = data.reset_index(drop=True)
+        return data
 
-    def update_trainset_preds(self, num_threads=32):
+    def update_trainset_preds(self, num_threads=128):
         predictor = self.predictor
         trainset = self.load_trainset()
         preds = predictor.predict(
@@ -276,6 +300,30 @@ class Label(BaseModel):
     def trainset_pred_tag(self):
         tag, _ = LabelTag.objects.get_or_create(
             name="trainset:pred",
+            label=self,
+        )
+        return tag
+
+    @property
+    def anno_true_tag(self):
+        tag, _ = LabelTag.objects.get_or_create(
+            name="anno:true",
+            label=self,
+        )
+        return tag
+
+    @property
+    def anno_false_tag(self):
+        tag, _ = LabelTag.objects.get_or_create(
+            name="anno:false",
+            label=self,
+        )
+        return tag
+
+    @property
+    def anno_flag_tag(self):
+        tag, _ = LabelTag.objects.get_or_create(
+            name="anno:flag",
             label=self,
         )
         return tag
@@ -452,7 +500,7 @@ class LabelHeuristic(BaseModel):
                 custom=custom_name,
             ).exists()
             if not heuristic_exists:
-                label = Label.objects.get(
+                label, _ = Label.objects.get_or_create(
                     name=custom_heuristic["label_name"],
                     project_id=custom_heuristic["project_id"],
                 )
