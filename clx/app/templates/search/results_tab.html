@@ -9,7 +9,7 @@
                             class="text-sm text-gray-500 hover:text-gray-700"
                             @click="semantic_sort = result.text; search()"
                         ><i class="fa-solid fa-circle-nodes"></i></button>
-                    <div class="text-sm text-gray-500" x-text="result.id"></div>
+                        <div class="text-sm text-gray-500" x-text="result.id"></div>
                     </div>
                     <div class="flex items-center gap-2">
                         <button
@@ -102,6 +102,22 @@
                 <div class="prose prose-sm max-w-none mb-3">
                     <p x-text="result.text"></p>
                 </div>
+                <template x-if="result.split">
+                    <div class="my-3 rounded-md border border-gray-200 bg-gray-50 p-3">
+                        <div class="flex items-center justify-between mb-1 text-xs font-medium">
+                            <div x-show="result.pred">
+                                <i class="fa-regular fa-circle-check text-green-600 me-1"></i> Predicted True
+                            </div>
+                            <div x-show="!result.pred">
+                                <i class="fa-regular fa-circle-xmark text-red-600 me-1"></i> Predicted False
+                            </div>
+                            <div class="text-gray-500">
+                                Trainset: <span x-text="result.split.toLocaleUpperCase()"></span>
+                            </div>
+                        </div>
+                        <div class="text-sm text-gray-800 whitespace-pre-wrap break-words" x-text="result.reason"></div>
+                    </div>
+                </template>
                 <div class="flex flex-wrap gap-2">
                     <template x-for="tag_id in (result.tags || []).filter(tid => (displayTags || []).includes(tid))" :key="tag_id">
                         <span

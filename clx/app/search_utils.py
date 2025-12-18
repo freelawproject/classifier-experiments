@@ -31,6 +31,7 @@ class SearchParams(PydanticModel):
 
 
 class SearchQuery(PydanticModel):
+    active_label_id: int | None = None
     params: SearchParams = SearchParams()
     sort: list[str] = ["shuffle_sort", "id"]
     semantic_sort: str | list[float] | None = None
@@ -123,10 +124,12 @@ class SearchQuerySet(CopyQuerySet):
 
     def search(self, **query):
         """Search with params, pagination, and sorting."""
+        project = self.model.get_project()
+
         # Prepare query
         if query.get("params", {}).get("tags"):
             query["params"]["tags"] = {
-                k: get_tag_ids(v, self.model.project_id)
+                k: get_tag_ids(v, project.id)
                 for k, v in query["params"]["tags"].items()
                 if v
             }
@@ -156,7 +159,27 @@ class SearchQuerySet(CopyQuerySet):
 
         # Apply pagination
         self = self.page(query["page"], size=query["page_size"])
-        return {"data": list(self)}
+        data = list(self)
+        active_label_id = query.get("active_label_id")
+        if active_label_id and len(data):
+            label = project.labels.get(id=active_label_id)
+            data = pd.DataFrame(data)
+            trainset_examples = label.trainset_examples.filter(
+                text_hash__in=data["text_hash"].tolist()
+            )
+            trainset_examples = trainset_examples.values(
+                "text_hash", "split", "pred", "reason"
+            )
+            trainset_examples = pd.DataFrame(trainset_examples)
+            if len(trainset_examples):
+                trainset_examples = trainset_examples.drop_duplicates(
+                    subset="text_hash"
+                )
+                data = data.merge(
+                    trainset_examples, on="text_hash", how="left"
+                )
+            data = data.to_dict(orient="records")
+        return {"data": data}
 
     def page(self, page, size=100):
         assert isinstance(page, int), "Page number must be an integer"
@@ -446,6 +469,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         if value in tag_ids:
             tags.tags.append(tag_ids[value])
         tags.save()
+        label.update_trainset_pred_counts()
 
     class Meta:
         abstract = True
