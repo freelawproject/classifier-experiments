@@ -12,8 +12,16 @@
         >Count</button>
     </div>
 
+    <label class="block text-sm text-gray-600 font-medium mb-1">Semantic Sort</label>
+    <textarea
+        x-model="semantic_sort"
+        @keydown.enter.prevent="search()"
+        placeholder="Enter semantic sort…"
+        class="w-full p-2 rounded-md bg-white ring-1 ring-gray-300 focus:ring-blue-500"
+    ></textarea>
+
     <!-- Querystring field -->
-    <div class="mb-1" x-data="{open: false}">
+    <div class="mb-1 mt-3" x-data="{open: false}">
         <div class="flex items-center justify-between">
             <label class="block text-sm text-gray-600 font-medium">Querystring</label>
             <button

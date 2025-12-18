@@ -232,6 +232,7 @@
                     "flag": null,
                 },
                 page: 1,
+                semantic_sort: '',
                 results: null,
                 total: null,
                 loading: false,
@@ -383,9 +384,11 @@
                     const data = await this.apiFetch('search/', {
                         method: 'POST',
                         body: {
+                            active_label_id: this.activeLabelId,
                             params: this.params,
                             page: this.page,
                             count: count,
+                            semantic_sort: this.semantic_sort,
                         },
                     });
                     if (data) {
@@ -471,6 +474,7 @@
                         body: { example_id: exampleId, label_id: this.activeLabelId, value: newValue },
                     });
                     await this.getTags();
+                    await this.getLabels();
                 },
 
                 // Decisions
