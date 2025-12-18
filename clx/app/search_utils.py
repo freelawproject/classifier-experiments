@@ -27,6 +27,7 @@ class TagParams(PydanticModel):
 
 
 class SearchParams(PydanticModel):
+    heuristic_bucket: str | None = None
     tags: TagParams = TagParams()
     querystring: str | None = None
 
@@ -127,6 +128,20 @@ class SearchQuerySet(CopyQuerySet):
         """Search with params, pagination, and sorting."""
         project = self.model.get_project()
 
+        active_label_id = query.get("active_label_id")
+        label = (
+            project.labels.get(id=active_label_id) if active_label_id else None
+        )
+
+        heuristic_bucket = query["params"].get("heuristic_bucket")
+        if label is not None and heuristic_bucket:
+            if heuristic_bucket == "excluded":
+                self = label.excluded_query(self)
+            elif heuristic_bucket == "neutral":
+                self = label.neutral_query(self)
+            elif heuristic_bucket == "likely":
+                self = label.likely_query(self)
+
         # Prepare query
         if query.get("params", {}).get("tags"):
             query["params"]["tags"] = {
@@ -161,9 +176,7 @@ class SearchQuerySet(CopyQuerySet):
         # Apply pagination
         self = self.page(query["page"], size=query["page_size"])
         data = list(self)
-        active_label_id = query.get("active_label_id")
-        if active_label_id and len(data):
-            label = project.labels.get(id=active_label_id)
+        if label is not None and len(data):
             data = pd.DataFrame(data)
             trainset_examples = label.trainset_examples.filter(
                 text_hash__in=data["text_hash"].tolist()

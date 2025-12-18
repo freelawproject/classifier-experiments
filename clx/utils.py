@@ -1,6 +1,5 @@
 import bz2
 import hashlib
-import json
 import os
 from pathlib import Path
 
@@ -8,6 +7,7 @@ import django
 import pandas as pd
 import regex as re
 import requests
+import simplejson as json
 from tqdm import tqdm
 
 tqdm.pandas()

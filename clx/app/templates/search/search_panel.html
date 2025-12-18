@@ -12,14 +12,6 @@
         >Count</button>
     </div>
 
-    <label class="block text-sm text-gray-600 font-medium mb-1">Semantic Sort</label>
-    <textarea
-        x-model="semantic_sort"
-        @keydown.enter.prevent="search()"
-        placeholder="Enter semantic sort…"
-        class="w-full p-2 rounded-md bg-white ring-1 ring-gray-300 focus:ring-blue-500"
-    ></textarea>
-
     <!-- Querystring field -->
     <div class="mb-1 mt-3" x-data="{open: false}">
         <div class="flex items-center justify-between">
@@ -65,6 +57,42 @@
             :class="(params.querystring && params.querystring.trim()) ? 'cursor-pointer hover:bg-gray-300' : 'opacity-50 pointer-events-none'"
         >Save as heuristic</span>
     </div>
+
+    <!-- Heuristic bucket -->
+    <label class="block text-sm text-gray-600 font-medium mb-1 mt-3">Heuristic bucket</label>
+    <div class="flex w-full rounded-md overflow-hidden border border-gray-300">
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition"
+            @click="params.heuristic_bucket = (params.heuristic_bucket === 'excluded' ? null : 'excluded'); search();"
+            :aria-pressed="params.heuristic_bucket === 'excluded'"
+            :class="params.heuristic_bucket === 'excluded' ? 'bg-red-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Excluded</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.heuristic_bucket = (params.heuristic_bucket === 'neutral' ? null : 'neutral'); search();"
+            :aria-pressed="params.heuristic_bucket === 'neutral'"
+            :class="params.heuristic_bucket === 'neutral' ? 'bg-amber-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Neutral</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.heuristic_bucket = (params.heuristic_bucket === 'likely' ? null : 'likely'); search();"
+            :aria-pressed="params.heuristic_bucket === 'likely'"
+            :class="params.heuristic_bucket === 'likely' ? 'bg-blue-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Likely</button>
+    </div>
+
+    <!-- Semantic sort field -->
+    <label class="block text-sm text-gray-600 font-medium mb-1 mt-3">Semantic Sort</label>
+    <textarea
+        x-model="semantic_sort"
+        @keydown.enter.prevent="search()"
+        placeholder="Enter semantic sort…"
+        class="w-full p-2 rounded-md bg-white ring-1 ring-gray-300 focus:ring-blue-500"
+    ></textarea>
+
     <!-- Tags fields -->
     <div class="mt-3" x-data="{
         tagGroups: [
