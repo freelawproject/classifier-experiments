@@ -1,9 +1,9 @@
-import json
 from copy import deepcopy
 from pathlib import Path
 from typing import ClassVar
 
 import dspy
+import simplejson as json
 from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
 
 

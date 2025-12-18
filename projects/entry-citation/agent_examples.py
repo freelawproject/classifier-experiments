@@ -1,4 +1,4 @@
-import json
+import simplejson as json
 
 from clx.llm import Agent, Tool
 

@@ -1,6 +1,5 @@
-import json
-
 import pandas as pd
+import simplejson as json
 
 from clx.settings import BASE_DIR, CLX_HOME
 

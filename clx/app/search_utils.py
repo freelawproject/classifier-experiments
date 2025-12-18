@@ -3,6 +3,7 @@ import random
 from io import StringIO
 
 import pandas as pd
+import simplejson as json
 from django.apps import apps
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
@@ -179,6 +180,7 @@ class SearchQuerySet(CopyQuerySet):
                     trainset_examples, on="text_hash", how="left"
                 )
             data = data.to_dict(orient="records")
+        data = json.loads(json.dumps(data, ignore_nan=True))
         return {"data": data}
 
     def page(self, page, size=100):

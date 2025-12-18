@@ -1,6 +1,5 @@
-import json
-
 import click
+import simplejson as json
 
 from clx.settings import CONFIG_PATH
 
