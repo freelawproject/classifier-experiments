@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import ClassVar
 
@@ -49,6 +50,7 @@ class DSPyPredictor:
             config = Path(config)
         if isinstance(config, Path):
             config = json.loads(config.read_text())
+        config = deepcopy(config)
         state = config.pop("state")
         program = cls(**config)
         if state:
@@ -114,6 +116,9 @@ class DSPyPredictor:
             examples = self.prepare_examples(examples)
             optimizer = self.load_optimizer(**optimizer_args)
             self._program = optimizer.compile(self.program, trainset=examples)
+            self.last_cost = sum(
+                [x["cost"] for x in lm.history if x["cost"] is not None]
+            )
 
 
 class GEPAPredictor(DSPyPredictor):
