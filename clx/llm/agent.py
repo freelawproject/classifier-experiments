@@ -1,7 +1,7 @@
-import json
 from typing import Any, ClassVar
 
 import litellm
+import simplejson as json
 from pydantic import BaseModel, Field
 
 litellm.drop_params = True

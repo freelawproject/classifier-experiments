@@ -19,7 +19,7 @@ scales2label = {
     "warrant": "Warrant",
     "verdict": "Verdict",
     "answer": "Answer",
-    # "complaint": "Complaint",
+    "complaint": "Complaint",
     "indictment": "Indictment",
     "information": "Information",
     "petition": "Petition",
@@ -29,7 +29,7 @@ scales2label = {
     "plea agreement": "Plea Agreement",
     "judgment": "Judgment",
     "stipulation": "Stipulation",
-    "motion": "Motion / Request",
+    "motion": "Motion",
     "order": "Order",
 }
 
@@ -60,7 +60,9 @@ def predict_scales(do_import):
 
             data = all_data.copy()
             if scales_path.exists():
-                existing_data = pd.read_csv(scales_path, usecols=["text_hash"])
+                existing_data = pd.read_csv(
+                    scales_path, usecols=["text_hash"], engine="python"
+                )
                 data = data[
                     ~data["text_hash"].isin(existing_data["text_hash"])
                 ]

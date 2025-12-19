@@ -3,6 +3,7 @@ import random
 from io import StringIO
 
 import pandas as pd
+import simplejson as json
 from django.apps import apps
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
@@ -26,11 +27,16 @@ class TagParams(PydanticModel):
 
 
 class SearchParams(PydanticModel):
+    heuristic_bucket: str | None = None
+    trainset_split: str | None = None
+    predictor_value: str | None = None
+    annotation_value: str | None = None
     tags: TagParams = TagParams()
     querystring: str | None = None
 
 
 class SearchQuery(PydanticModel):
+    active_label_id: int | None = None
     params: SearchParams = SearchParams()
     sort: list[str] = ["shuffle_sort", "id"]
     semantic_sort: str | list[float] | None = None
@@ -123,10 +129,79 @@ class SearchQuerySet(CopyQuerySet):
 
     def search(self, **query):
         """Search with params, pagination, and sorting."""
+        project = self.model.get_project()
+
+        active_label_id = query.get("active_label_id")
+        label = (
+            project.labels.get(id=active_label_id) if active_label_id else None
+        )
+
+        # Apply heuristic bucket filter
+        heuristic_bucket = query["params"].get("heuristic_bucket")
+        if label is not None and heuristic_bucket:
+            if heuristic_bucket == "excluded":
+                self = label.excluded_query(self)
+            elif heuristic_bucket == "neutral":
+                self = label.neutral_query(self)
+            elif heuristic_bucket == "likely":
+                self = label.likely_query(self)
+
+        # Apply trainset split filter
+        trainset_split = query["params"].get("trainset_split")
+        if label is not None and trainset_split:
+            if trainset_split == "train":
+                self = self.tags(any=[label.trainset_train_tag.id])
+            elif trainset_split == "eval":
+                self = self.tags(any=[label.trainset_eval_tag.id])
+            elif trainset_split == "both":
+                self = self.tags(
+                    any=[
+                        label.trainset_train_tag.id,
+                        label.trainset_eval_tag.id,
+                    ]
+                )
+
+        # Apply predictor value filter
+        predictor_value = query["params"].get("predictor_value")
+        if label is not None and predictor_value:
+            self = self.tags(
+                any=[label.trainset_train_tag.id, label.trainset_eval_tag.id]
+            )
+            if predictor_value == "true":
+                self = self.tags(any=[label.trainset_pred_tag.id])
+            elif predictor_value == "false":
+                self = self.tags(not_any=[label.trainset_pred_tag.id])
+
+        # Apply manual annotation filter
+        annotation_value = query["params"].get("annotation_value")
+        if label is not None and annotation_value:
+            if annotation_value == "true":
+                self = self.tags(any=[label.anno_true_tag.id])
+            elif annotation_value == "false":
+                self = self.tags(any=[label.anno_false_tag.id])
+            elif annotation_value == "flag":
+                self = self.tags(any=[label.anno_flag_tag.id])
+            elif annotation_value == "any":
+                self = self.tags(
+                    any=[
+                        label.anno_true_tag.id,
+                        label.anno_false_tag.id,
+                        label.anno_flag_tag.id,
+                    ]
+                )
+            elif annotation_value == "none":
+                self = self.tags(
+                    not_any=[
+                        label.anno_true_tag.id,
+                        label.anno_false_tag.id,
+                        label.anno_flag_tag.id,
+                    ]
+                )
+
         # Prepare query
         if query.get("params", {}).get("tags"):
             query["params"]["tags"] = {
-                k: get_tag_ids(v, self.model.project_id)
+                k: get_tag_ids(v, project.id)
                 for k, v in query["params"]["tags"].items()
                 if v
             }
@@ -156,7 +231,26 @@ class SearchQuerySet(CopyQuerySet):
 
         # Apply pagination
         self = self.page(query["page"], size=query["page_size"])
-        return {"data": list(self)}
+        data = list(self)
+        if label is not None and len(data):
+            data = pd.DataFrame(data)
+            trainset_examples = label.trainset_examples.filter(
+                text_hash__in=data["text_hash"].tolist()
+            )
+            trainset_examples = trainset_examples.values(
+                "text_hash", "split", "pred", "reason"
+            )
+            trainset_examples = pd.DataFrame(trainset_examples)
+            if len(trainset_examples):
+                trainset_examples = trainset_examples.drop_duplicates(
+                    subset="text_hash"
+                )
+                data = data.merge(
+                    trainset_examples, on="text_hash", how="left"
+                )
+            data = data.to_dict(orient="records")
+        data = json.loads(json.dumps(data, ignore_nan=True))
+        return {"data": data}
 
     def page(self, page, size=100):
         assert isinstance(page, int), "Page number must be an integer"
@@ -446,6 +540,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
         if value in tag_ids:
             tags.tags.append(tag_ids[value])
         tags.save()
+        label.update_trainset_pred_counts()
 
     class Meta:
         abstract = True

@@ -1,7 +1,7 @@
 # flake8: noqa: E402
-import json
 from pathlib import Path
 
+import simplejson as json
 from dotenv import load_dotenv
 
 config_path = Path.home() / ".cache" / "clx" / "config.json"

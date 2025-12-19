@@ -13,7 +13,7 @@
     </div>
 
     <!-- Querystring field -->
-    <div class="mb-1" x-data="{open: false}">
+    <div class="mb-1 mt-3" x-data="{open: false}">
         <div class="flex items-center justify-between">
             <label class="block text-sm text-gray-600 font-medium">Querystring</label>
             <button
@@ -57,6 +57,127 @@
             :class="(params.querystring && params.querystring.trim()) ? 'cursor-pointer hover:bg-gray-300' : 'opacity-50 pointer-events-none'"
         >Save as heuristic</span>
     </div>
+
+    <!-- Heuristic bucket -->
+    <label class="block text-sm text-gray-600 font-medium mb-1 mt-2">Heuristic bucket</label>
+    <div class="flex w-full rounded-md overflow-hidden border border-gray-300">
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition"
+            @click="params.heuristic_bucket = (params.heuristic_bucket === 'excluded' ? null : 'excluded'); search();"
+            :aria-pressed="params.heuristic_bucket === 'excluded'"
+            :class="params.heuristic_bucket === 'excluded' ? 'bg-red-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Excluded</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.heuristic_bucket = (params.heuristic_bucket === 'neutral' ? null : 'neutral'); search();"
+            :aria-pressed="params.heuristic_bucket === 'neutral'"
+            :class="params.heuristic_bucket === 'neutral' ? 'bg-amber-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Neutral</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.heuristic_bucket = (params.heuristic_bucket === 'likely' ? null : 'likely'); search();"
+            :aria-pressed="params.heuristic_bucket === 'likely'"
+            :class="params.heuristic_bucket === 'likely' ? 'bg-blue-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Likely</button>
+    </div>
+
+    <!-- Trainset split -->
+    <label class="block text-sm text-gray-600 font-medium mb-1 mt-4">Trainset Split</label>
+    <div class="flex w-full rounded-md overflow-hidden border border-gray-300">
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition"
+            @click="params.trainset_split = (params.trainset_split === 'train' ? null : 'train'); search();"
+            :aria-pressed="params.trainset_split === 'train'"
+            :class="params.trainset_split === 'train' ? 'bg-blue-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Train</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.trainset_split = (params.trainset_split === 'eval' ? null : 'eval'); search();"
+            :aria-pressed="params.trainset_split === 'eval'"
+            :class="params.trainset_split === 'eval' ? 'bg-blue-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Eval</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.trainset_split = (params.trainset_split === 'both' ? null : 'both'); search();"
+            :aria-pressed="params.trainset_split === 'both'"
+            :class="params.trainset_split === 'both' ? 'bg-blue-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Both</button>
+    </div>
+
+    <!-- Predictor value -->
+    <label class="block text-sm text-gray-600 font-medium mb-1 mt-4">Predictor Value</label>
+    <div class="flex w-full rounded-md overflow-hidden border border-gray-300">
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition"
+            @click="params.predictor_value = (params.predictor_value === 'true' ? null : 'true'); search();"
+            :aria-pressed="params.predictor_value === 'true'"
+            :class="params.predictor_value === 'true' ? 'bg-green-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >True</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.predictor_value = (params.predictor_value === 'false' ? null : 'false'); search();"
+            :aria-pressed="params.predictor_value === 'false'"
+            :class="params.predictor_value === 'false' ? 'bg-red-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >False</button>
+    </div>
+
+    <!-- Manual annotation -->
+    <label class="block text-sm text-gray-600 font-medium mb-1 mt-4">Manual Annotation</label>
+    <div class="flex w-full rounded-md overflow-hidden border border-gray-300">
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition"
+            @click="params.annotation_value = (params.annotation_value === 'true' ? null : 'true'); search();"
+            :aria-pressed="params.annotation_value === 'true'"
+            :class="params.annotation_value === 'true' ? 'bg-green-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >True</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.annotation_value = (params.annotation_value === 'false' ? null : 'false'); search();"
+            :aria-pressed="params.annotation_value === 'false'"
+            :class="params.annotation_value === 'false' ? 'bg-red-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >False</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.annotation_value = (params.annotation_value === 'flag' ? null : 'flag'); search();"
+            :aria-pressed="params.annotation_value === 'flag'"
+            :class="params.annotation_value === 'flag' ? 'bg-amber-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Flag</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.annotation_value = (params.annotation_value === 'any' ? null : 'any'); search();"
+            :aria-pressed="params.annotation_value === 'any'"
+            :class="params.annotation_value === 'any' ? 'bg-blue-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Any</button>
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition border-l border-gray-300"
+            @click="params.annotation_value = (params.annotation_value === 'none' ? null : 'none'); search();"
+            :aria-pressed="params.annotation_value === 'none'"
+            :class="params.annotation_value === 'none' ? 'bg-gray-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >None</button>
+    </div>
+
+    <!-- Semantic sort field -->
+    <label class="block text-sm text-gray-600 font-medium mb-1 mt-4">Semantic Sort</label>
+    <textarea
+        x-model="semantic_sort"
+        @keydown.enter.prevent="search()"
+        placeholder="Enter semantic sort…"
+        class="w-full p-2 rounded-md bg-white ring-1 ring-gray-300 focus:ring-blue-500"
+    ></textarea>
+
     <!-- Tags fields -->
     <div class="mt-3" x-data="{
         tagGroups: [

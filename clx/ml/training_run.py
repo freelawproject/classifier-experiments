@@ -1,10 +1,10 @@
 import gc
-import json
 import shutil
 from pathlib import Path
 from typing import ClassVar
 
 import pandas as pd
+import simplejson as json
 import torch
 from datasets import Dataset
 from transformers import (

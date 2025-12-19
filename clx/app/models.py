@@ -1,7 +1,6 @@
-import json
-
 import lmdb
 import pandas as pd
+import simplejson as json
 from django.apps import apps
 from django.db import models
 from django.utils import timezone
@@ -78,7 +77,9 @@ class Project(BaseModel):
 class Label(BaseModel):
     """Model for labels."""
 
-    project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="labels"
+    )
     name = models.CharField(max_length=255)
 
     # Sample counts
@@ -127,15 +128,18 @@ class Label(BaseModel):
     trainset_num_positive_preds = models.IntegerField(default=0)
     trainset_num_negative_preds = models.IntegerField(default=0)
 
-    def excluded_query(self):
+    def excluded_query(self, queryset=None):
+        if queryset is None:
+            queryset = self.project.get_search_model().objects
         tags = LabelTag.objects.filter(label=self, heuristic__is_minimal=True)
         tag_ids = tags.values_list("id", flat=True)
-        model = self.project.get_search_model()
         if not tag_ids:
-            return model.objects.none()
-        return model.objects.tags(not_any=tag_ids)
+            return queryset.none()
+        return queryset.tags(not_any=tag_ids)
 
-    def neutral_query(self):
+    def neutral_query(self, queryset=None):
+        if queryset is None:
+            queryset = self.project.get_search_model().objects
         minimal_tags = LabelTag.objects.filter(
             label=self, heuristic__is_minimal=True
         )
@@ -144,10 +148,11 @@ class Label(BaseModel):
             label=self, heuristic__is_likely=True
         )
         likely_tag_ids = likely_tags.values_list("id", flat=True)
-        model = self.project.get_search_model()
-        return model.objects.tags(any=minimal_tag_ids, not_any=likely_tag_ids)
+        return queryset.tags(any=minimal_tag_ids, not_any=likely_tag_ids)
 
-    def likely_query(self):
+    def likely_query(self, queryset=None):
+        if queryset is None:
+            queryset = self.project.get_search_model().objects
         minimal_tags = LabelTag.objects.filter(
             label=self, heuristic__is_minimal=True
         )
@@ -156,10 +161,9 @@ class Label(BaseModel):
             label=self, heuristic__is_likely=True
         )
         likely_tag_ids = likely_tags.values_list("id", flat=True)
-        model = self.project.get_search_model()
         if not likely_tag_ids:
-            return model.objects.none()
-        return model.objects.tags(any=minimal_tag_ids).tags(any=likely_tag_ids)
+            return queryset.none()
+        return queryset.tags(any=minimal_tag_ids).tags(any=likely_tag_ids)
 
     def update_counts(self):
         self.num_excluded = self.excluded_query().count()
