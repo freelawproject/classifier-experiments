@@ -28,6 +28,9 @@ class TagParams(PydanticModel):
 
 class SearchParams(PydanticModel):
     heuristic_bucket: str | None = None
+    trainset_split: str | None = None
+    predictor_value: str | None = None
+    annotation_value: str | None = None
     tags: TagParams = TagParams()
     querystring: str | None = None
 
@@ -133,6 +136,7 @@ class SearchQuerySet(CopyQuerySet):
             project.labels.get(id=active_label_id) if active_label_id else None
         )
 
+        # Apply heuristic bucket filter
         heuristic_bucket = query["params"].get("heuristic_bucket")
         if label is not None and heuristic_bucket:
             if heuristic_bucket == "excluded":
@@ -141,6 +145,58 @@ class SearchQuerySet(CopyQuerySet):
                 self = label.neutral_query(self)
             elif heuristic_bucket == "likely":
                 self = label.likely_query(self)
+
+        # Apply trainset split filter
+        trainset_split = query["params"].get("trainset_split")
+        if label is not None and trainset_split:
+            if trainset_split == "train":
+                self = self.tags(any=[label.trainset_train_tag.id])
+            elif trainset_split == "eval":
+                self = self.tags(any=[label.trainset_eval_tag.id])
+            elif trainset_split == "both":
+                self = self.tags(
+                    any=[
+                        label.trainset_train_tag.id,
+                        label.trainset_eval_tag.id,
+                    ]
+                )
+
+        # Apply predictor value filter
+        predictor_value = query["params"].get("predictor_value")
+        if label is not None and predictor_value:
+            self = self.tags(
+                any=[label.trainset_train_tag.id, label.trainset_eval_tag.id]
+            )
+            if predictor_value == "true":
+                self = self.tags(any=[label.trainset_pred_tag.id])
+            elif predictor_value == "false":
+                self = self.tags(not_any=[label.trainset_pred_tag.id])
+
+        # Apply manual annotation filter
+        annotation_value = query["params"].get("annotation_value")
+        if label is not None and annotation_value:
+            if annotation_value == "true":
+                self = self.tags(any=[label.anno_true_tag.id])
+            elif annotation_value == "false":
+                self = self.tags(any=[label.anno_false_tag.id])
+            elif annotation_value == "flag":
+                self = self.tags(any=[label.anno_flag_tag.id])
+            elif annotation_value == "any":
+                self = self.tags(
+                    any=[
+                        label.anno_true_tag.id,
+                        label.anno_false_tag.id,
+                        label.anno_flag_tag.id,
+                    ]
+                )
+            elif annotation_value == "none":
+                self = self.tags(
+                    not_any=[
+                        label.anno_true_tag.id,
+                        label.anno_false_tag.id,
+                        label.anno_flag_tag.id,
+                    ]
+                )
 
         # Prepare query
         if query.get("params", {}).get("tags"):

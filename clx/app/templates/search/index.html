@@ -104,7 +104,7 @@
 
     <!-- Search -->
     <div class="max-w-[1460px] mx-auto px-4">
-        <div class="grid grid-cols-[18rem_minmax(0,1fr)_18rem] gap-4 h-[calc(100vh-3rem)]">
+        <div class="grid grid-cols-[20rem_minmax(0,1fr)_18rem] gap-4 h-[calc(100vh-3rem)]">
             {% include "search/search_panel.html" %}
 
             <!-- Main Tabs -->
@@ -210,6 +210,9 @@
                 displayTags: [],
                 params: {
                     heuristic_bucket: null,
+                    trainset_split: null,
+                    predictor_value: null,
+                    annotation_value: null,
                     querystring: '',
                     tags: {
                         any: [],
