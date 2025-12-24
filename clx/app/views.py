@@ -73,6 +73,7 @@ def labels_endpoint(request, project_id):
         "trainset_num_excluded",
         "trainset_num_neutral",
         "trainset_num_likely",
+        "trainset_num_decision_neighbors",
         "trainset_num_positive_preds",
         "trainset_num_negative_preds",
         "trainset_predictions_updated_at",
@@ -300,6 +301,9 @@ def predictor_update_trainset_endpoint(request, project_id):
     )
     label.trainset_num_neutral = int(payload.get("trainset_num_neutral", 1000))
     label.trainset_num_likely = int(payload.get("trainset_num_likely", 1000))
+    label.trainset_num_decision_neighbors = int(
+        payload.get("trainset_num_decision_neighbors", 50)
+    )
     label.save()
     label.update_trainset()
     return JsonResponse({"ok": True})

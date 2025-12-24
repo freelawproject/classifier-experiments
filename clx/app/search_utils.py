@@ -10,7 +10,11 @@ from django.contrib.postgres.indexes import GinIndex
 from django.db import connection, models, transaction
 from django.db.models import Q
 from django.utils import timezone
-from pgvector.django import CosineDistance, HalfVectorField, HnswIndex
+from pgvector.django import (
+    CosineDistance,
+    HalfVectorField,
+    HnswIndex,
+)
 from postgres_copy import CopyManager, CopyQuerySet
 from pydantic import BaseModel as PydanticModel
 
@@ -131,6 +135,18 @@ class SearchQuerySet(CopyQuerySet):
         """Search with params, pagination, and sorting."""
         project = self.model.get_project()
 
+        # Prepare query
+        if query.get("params", {}).get("tags"):
+            query["params"]["tags"] = {
+                k: get_tag_ids(v, project.id)
+                for k, v in query["params"]["tags"].items()
+                if v
+            }
+
+        # Validate query
+        query = SearchQuery(**query).model_dump()
+        self = self.annotate(tags=models.F("example_tags__tags"))
+
         active_label_id = query.get("active_label_id")
         label = (
             project.labels.get(id=active_label_id) if active_label_id else None
@@ -197,18 +213,6 @@ class SearchQuerySet(CopyQuerySet):
                         label.anno_flag_tag.id,
                     ]
                 )
-
-        # Prepare query
-        if query.get("params", {}).get("tags"):
-            query["params"]["tags"] = {
-                k: get_tag_ids(v, project.id)
-                for k, v in query["params"]["tags"].items()
-                if v
-            }
-
-        # Validate query
-        query = SearchQuery(**query).model_dump()
-        self = self.annotate(tags=models.F("example_tags__tags"))
 
         # Apply param filters
         params = query["params"]

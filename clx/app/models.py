@@ -121,6 +121,7 @@ class Label(BaseModel):
     trainset_num_excluded = models.IntegerField(default=1000)
     trainset_num_neutral = models.IntegerField(default=1000)
     trainset_num_likely = models.IntegerField(default=1000)
+    trainset_num_decision_neighbors = models.IntegerField(default=50)
     trainset_updated_at = models.DateTimeField(null=True, blank=True)
     trainset_predictions_updated_at = models.DateTimeField(
         null=True, blank=True
@@ -174,6 +175,19 @@ class Label(BaseModel):
     def sample_trainset(self, ratio=1):
         """Sample trainset examples."""
         data = []
+        # Sample decision neighbors
+        model = self.project.get_search_model()
+        for decision in self.decisions.all():
+            embedding = model.objects.get(
+                text_hash=decision.text_hash
+            ).embedding.to_list()
+            decision_examples = model.objects.search(
+                semantic_sort=embedding,
+                page_size=int(self.trainset_num_decision_neighbors * ratio),
+            )
+            data += [{"id": x["id"]} for x in decision_examples["data"]]
+
+        # Sample heuristic buckets
         excluded_examples = self.excluded_query().order_by("?").values("id")
         data += list(
             excluded_examples[: int(self.trainset_num_excluded * ratio)]

@@ -225,6 +225,7 @@
                     numExcluded: 1000,
                     numNeutral: 1000,
                     numLikely: 1000,
+                    numDecisionNeighbors: 50,
                 },
                 predictorConfig: {
                     inferenceModel: '{{ label_class.default_inference_model }}',
@@ -596,6 +597,7 @@
                             trainset_num_excluded: this.trainsetConfig.numExcluded,
                             trainset_num_neutral: this.trainsetConfig.numNeutral,
                             trainset_num_likely: this.trainsetConfig.numLikely,
+                            trainset_num_decision_neighbors: this.trainsetConfig.numDecisionNeighbors,
                         },
                         jobName: 'Resampling Trainset',
                     });
@@ -635,6 +637,7 @@
                     this.trainsetConfig.numExcluded = this.labels?.[labelId]?.trainset_num_excluded || 1000;
                     this.trainsetConfig.numNeutral = this.labels?.[labelId]?.trainset_num_neutral || 1000;
                     this.trainsetConfig.numLikely = this.labels?.[labelId]?.trainset_num_likely || 1000;
+                    this.trainsetConfig.numDecisionNeighbors = this.labels?.[labelId]?.trainset_num_decision_neighbors || 50;
                     this.predictorConfig.inferenceModel = this.labels?.[labelId]?.inference_model || '{{ label_class.default_inference_model }}';
                     this.predictorConfig.teacherModel = this.labels?.[labelId]?.teacher_model || '{{ label_class.default_teacher_model }}';
                     this.annoTagIds.true = this.getTagsByPrefix('anno:true', true).map(t => t.id).find(id => id !== null);
