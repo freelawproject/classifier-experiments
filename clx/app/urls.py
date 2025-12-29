@@ -102,4 +102,9 @@ urlpatterns = [
         views.predictor_fit_endpoint,
         name="predictor-fit-endpoint",
     ),
+    path(
+        "api/project/<slug:project_id>/finetunes/",
+        views.finetunes_endpoint,
+        name="finetunes-endpoint",
+    ),
 ]

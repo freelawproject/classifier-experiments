@@ -7,7 +7,14 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from .custom_heuristics import custom_heuristics
-from .models import Label, LabelDecision, LabelHeuristic, LabelTag, Project
+from .models import (
+    Label,
+    LabelDecision,
+    LabelFinetune,
+    LabelHeuristic,
+    LabelTag,
+    Project,
+)
 
 
 # Endpoints
@@ -332,6 +339,20 @@ def predictor_fit_endpoint(request, project_id):
     label.save()
     label.fit_predictor()
     return JsonResponse({"ok": True})
+
+
+# Finetunes Endpoints
+@csrf_exempt
+@require_POST
+def finetunes_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
+    finetunes_qs = LabelFinetune.objects.filter(label_id=label_id).values(
+        "id", "config_name", "eval_results"
+    )
+    finetunes = {row["id"]: row for row in finetunes_qs}
+    return JsonResponse({"finetunes": finetunes})
 
 
 # Views
