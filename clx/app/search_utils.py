@@ -35,6 +35,7 @@ class SearchParams(PydanticModel):
     trainset_split: str | None = None
     predictor_value: str | None = None
     annotation_value: str | None = None
+    review_disagreements: bool | None = None
     tags: TagParams = TagParams()
     querystring: str | None = None
 
@@ -213,6 +214,28 @@ class SearchQuerySet(CopyQuerySet):
                         label.anno_flag_tag.id,
                     ]
                 )
+
+        # Apply disagreements review filter
+        review_disagreements = query["params"].get("review_disagreements")
+        if label is not None and review_disagreements:
+            tag_ids = [label.trainset_pred_tag.id]
+            config_names = list(
+                label.fintunes.values_list("config_name", flat=True)
+            )
+            for config_name in config_names:
+                tag_ids.append(label.get_trainset_finetune_tag(config_name).id)
+            if len(tag_ids) <= 1:
+                self = self.none()
+            else:
+                q_disagree = Q()
+                for i in tag_ids:
+                    for j in tag_ids:
+                        if i == j:
+                            continue
+                        q_disagree |= Q(example_tags__tags__contains=[i]) & ~Q(
+                            example_tags__tags__contains=[j]
+                        )
+                self = self.filter(q_disagree)
 
         # Apply param filters
         params = query["params"]

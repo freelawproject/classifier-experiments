@@ -169,6 +169,18 @@
         >None</button>
     </div>
 
+    <!-- Review disagreements -->
+    <label class="block text-sm text-gray-600 font-medium mb-1 mt-4">Review Disagreements</label>
+    <div class="flex w-full rounded-md overflow-hidden border border-gray-300">
+        <button
+            type="button"
+            class="flex-1 px-3 py-1.5 text-sm text-center transition"
+            @click="params.review_disagreements = !params.review_disagreements; search();"
+            :aria-pressed="!!params.review_disagreements"
+            :class="params.review_disagreements ? 'bg-purple-300' : 'bg-white text-gray-700 hover:bg-gray-50'"
+        >Review</button>
+    </div>
+
     <!-- Semantic sort field -->
     <label class="block text-sm text-gray-600 font-medium mb-1 mt-4">Semantic Sort</label>
     <textarea
