@@ -10,7 +10,11 @@ from django.contrib.postgres.indexes import GinIndex
 from django.db import connection, models, transaction
 from django.db.models import Q
 from django.utils import timezone
-from pgvector.django import CosineDistance, HalfVectorField, HnswIndex
+from pgvector.django import (
+    CosineDistance,
+    HalfVectorField,
+    HnswIndex,
+)
 from postgres_copy import CopyManager, CopyQuerySet
 from pydantic import BaseModel as PydanticModel
 
@@ -31,6 +35,7 @@ class SearchParams(PydanticModel):
     trainset_split: str | None = None
     predictor_value: str | None = None
     annotation_value: str | None = None
+    review_disagreements: bool | None = None
     tags: TagParams = TagParams()
     querystring: str | None = None
 
@@ -131,6 +136,18 @@ class SearchQuerySet(CopyQuerySet):
         """Search with params, pagination, and sorting."""
         project = self.model.get_project()
 
+        # Prepare query
+        if query.get("params", {}).get("tags"):
+            query["params"]["tags"] = {
+                k: get_tag_ids(v, project.id)
+                for k, v in query["params"]["tags"].items()
+                if v
+            }
+
+        # Validate query
+        query = SearchQuery(**query).model_dump()
+        self = self.annotate(tags=models.F("example_tags__tags"))
+
         active_label_id = query.get("active_label_id")
         label = (
             project.labels.get(id=active_label_id) if active_label_id else None
@@ -198,17 +215,27 @@ class SearchQuerySet(CopyQuerySet):
                     ]
                 )
 
-        # Prepare query
-        if query.get("params", {}).get("tags"):
-            query["params"]["tags"] = {
-                k: get_tag_ids(v, project.id)
-                for k, v in query["params"]["tags"].items()
-                if v
-            }
-
-        # Validate query
-        query = SearchQuery(**query).model_dump()
-        self = self.annotate(tags=models.F("example_tags__tags"))
+        # Apply disagreements review filter
+        review_disagreements = query["params"].get("review_disagreements")
+        if label is not None and review_disagreements:
+            tag_ids = [label.trainset_pred_tag.id]
+            config_names = list(
+                label.fintunes.values_list("config_name", flat=True)
+            )
+            for config_name in config_names:
+                tag_ids.append(label.get_trainset_finetune_tag(config_name).id)
+            if len(tag_ids) <= 1:
+                self = self.none()
+            else:
+                q_disagree = Q()
+                for i in tag_ids:
+                    for j in tag_ids:
+                        if i == j:
+                            continue
+                        q_disagree |= Q(example_tags__tags__contains=[i]) & ~Q(
+                            example_tags__tags__contains=[j]
+                        )
+                self = self.filter(q_disagree)
 
         # Apply param filters
         params = query["params"]
@@ -323,6 +350,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
     """Search document model."""
 
     project_id = None
+    finetune_configs = {}
 
     id = models.BigIntegerField(primary_key=True)
     text = models.TextField()

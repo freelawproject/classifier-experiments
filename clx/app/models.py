@@ -121,12 +121,17 @@ class Label(BaseModel):
     trainset_num_excluded = models.IntegerField(default=1000)
     trainset_num_neutral = models.IntegerField(default=1000)
     trainset_num_likely = models.IntegerField(default=1000)
+    trainset_num_decision_neighbors = models.IntegerField(default=50)
     trainset_updated_at = models.DateTimeField(null=True, blank=True)
     trainset_predictions_updated_at = models.DateTimeField(
         null=True, blank=True
     )
     trainset_num_positive_preds = models.IntegerField(default=0)
     trainset_num_negative_preds = models.IntegerField(default=0)
+
+    @property
+    def data_dir(self):
+        return self.project.data_dir / "labels" / f"{label2slug(self.name)}"
 
     def excluded_query(self, queryset=None):
         if queryset is None:
@@ -174,6 +179,19 @@ class Label(BaseModel):
     def sample_trainset(self, ratio=1):
         """Sample trainset examples."""
         data = []
+        # Sample decision neighbors
+        model = self.project.get_search_model()
+        for decision in self.decisions.all():
+            embedding = model.objects.get(
+                text_hash=decision.text_hash
+            ).embedding.to_list()
+            decision_examples = model.objects.search(
+                semantic_sort=embedding,
+                page_size=int(self.trainset_num_decision_neighbors * ratio),
+            )
+            data += [{"id": x["id"]} for x in decision_examples["data"]]
+
+        # Sample heuristic buckets
         excluded_examples = self.excluded_query().order_by("?").values("id")
         data += list(
             excluded_examples[: int(self.trainset_num_excluded * ratio)]
@@ -235,11 +253,12 @@ class Label(BaseModel):
         neg_annos = pd.DataFrame(neg_annos)
         neg_annos["split"], neg_annos["pred"] = "train", False
         data = pd.concat([data, pos_annos, neg_annos])
-        data = data.drop_duplicates(subset="text_hash", keep="last")
-        flag_hashes = search_model.objects.tags(
-            any=[self.anno_flag_tag.id]
-        ).values_list("text_hash", flat=True)
-        data = data[~data["text_hash"].isin(flag_hashes)]
+        if len(data) and "text_hash" in data.columns:
+            data = data.drop_duplicates(subset="text_hash", keep="last")
+            flag_hashes = search_model.objects.tags(
+                any=[self.anno_flag_tag.id]
+            ).values_list("text_hash", flat=True)
+            data = data[~data["text_hash"].isin(flag_hashes)]
         data = data.sample(frac=1, random_state=42)
         data = data.reset_index(drop=True)
         return data
@@ -250,13 +269,12 @@ class Label(BaseModel):
         preds = predictor.predict(
             trainset["text"].tolist(), num_threads=num_threads
         )
-        print(predictor.last_cost)
         trainset["pred"] = [x.value for x in preds]
         trainset["reason"] = [x.reason for x in preds]
         examples = self.trainset_examples.all()
-        examples = {e.id: e for e in examples}
+        examples = {e.text_hash: e for e in examples}
         for row in trainset.to_dict("records"):
-            example = examples[row["id"]]
+            example = examples[row["text_hash"]]
             example.pred = row["pred"]
             example.reason = row["reason"]
         LabelTrainsetExample.objects.bulk_update(
@@ -264,10 +282,20 @@ class Label(BaseModel):
             fields=["pred", "reason"],
             batch_size=1000,
         )
-        self.trainset_num_positive_preds = trainset["pred"].sum()
-        self.trainset_num_negative_preds = (~trainset["pred"]).sum()
+        self.update_trainset_pred_counts()
         self.sync_trainset_pred_tags()
         self.trainset_predictions_updated_at = timezone.now()
+        self.save()
+
+    def update_trainset_pred_counts(self):
+        data = self.load_trainset()
+        if len(data) and "pred" in data.columns:
+            data = data.dropna(subset=["pred"])
+            self.trainset_num_positive_preds = data["pred"].sum()
+            self.trainset_num_negative_preds = (~data["pred"]).sum()
+        else:
+            self.trainset_num_positive_preds = 0
+            self.trainset_num_negative_preds = 0
         self.save()
 
     def get_new_predictor(self):
@@ -305,6 +333,13 @@ class Label(BaseModel):
     def trainset_pred_tag(self):
         tag, _ = LabelTag.objects.get_or_create(
             name="trainset:pred",
+            label=self,
+        )
+        return tag
+
+    def get_trainset_finetune_tag(self, config_name):
+        tag, _ = LabelTag.objects.get_or_create(
+            name=f"trainset:ft:{config_name}",
             label=self,
         )
         return tag
@@ -401,6 +436,45 @@ class Label(BaseModel):
         self.predictor_updated_at = timezone.now()
         self.save()
         print(predictor.last_cost)
+
+    def prepare_finetune(
+        self, config_name, batch_size=16, gradient_accumulation_steps=1
+    ):
+        model = self.project.get_search_model()
+        config = model.finetune_configs[config_name]
+        data = self.load_trainset()
+        data = data.sample(frac=1, random_state=42)
+        data = (
+            data[["text_hash", "text", "pred", "split"]]
+            .rename(columns={"pred": "label"})
+            .dropna()
+        )
+        data["label"] = data["label"].apply(lambda x: "yes" if x else "no")
+        train_data = data[data["split"] == "train"]
+        eval_data = data[data["split"] == "eval"]
+
+        num_train_epochs = 1
+        total_steps = (num_train_epochs * len(train_data)) // (
+            batch_size * gradient_accumulation_steps
+        )
+        save_steps = total_steps // 9
+        config["training_args"]["eval_strategy"] = "steps"
+        config["training_args"]["save_strategy"] = "steps"
+        config["training_args"]["eval_steps"] = save_steps
+        config["training_args"]["save_steps"] = save_steps
+        config["training_args"]["per_device_train_batch_size"] = batch_size
+        config["training_args"]["per_device_eval_batch_size"] = batch_size
+        config["training_args"]["gradient_accumulation_steps"] = (
+            gradient_accumulation_steps
+        )
+
+        run_config = {
+            "task": "classification",
+            "label_names": ["yes", "no"],
+            **config,
+        }
+
+        return train_data, eval_data, run_config
 
     class Meta:
         unique_together = ("project", "name")
@@ -583,10 +657,54 @@ class LabelTrainsetExample(BaseModel):
         unique_together = ("label", "text_hash")
 
 
+class LabelFinetune(BaseModel):
+    """Model for single-label finetuned models."""
+
+    label = models.ForeignKey(
+        Label, on_delete=models.CASCADE, related_name="fintunes"
+    )
+    config_name = models.CharField(max_length=255)
+    eval_results = models.JSONField(null=True, blank=True)
+
+
 class DocketEntry(SearchDocumentModel):
     """Docket entry model for main document entries."""
 
     project_id = "docket-entry"
+    finetune_configs = {
+        "underfit": {
+            "base_model_name": str(
+                CLX_HOME
+                / "projects"
+                / "docketbert"
+                / "runs"
+                / "docketbert-large-395M"
+                / "model"
+            ),
+            "training_args": {
+                "num_train_epochs": 1,
+                "learning_rate": 5e-5,
+                "warmup_ratio": 0.05,
+                "bf16": True,
+            },
+        },
+        "main": {
+            "base_model_name": str(
+                CLX_HOME
+                / "projects"
+                / "docketbert"
+                / "runs"
+                / "docketbert-large-395M"
+                / "model"
+            ),
+            "training_args": {
+                "num_train_epochs": 10,
+                "learning_rate": 5e-5,
+                "warmup_ratio": 0.05,
+                "bf16": True,
+            },
+        },
+    }
 
     id = models.BigIntegerField(primary_key=True)
     recap_id = models.BigIntegerField(unique=True)

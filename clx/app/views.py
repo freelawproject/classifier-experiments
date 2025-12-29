@@ -7,7 +7,14 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from .custom_heuristics import custom_heuristics
-from .models import Label, LabelDecision, LabelHeuristic, LabelTag, Project
+from .models import (
+    Label,
+    LabelDecision,
+    LabelFinetune,
+    LabelHeuristic,
+    LabelTag,
+    Project,
+)
 
 
 # Endpoints
@@ -73,6 +80,7 @@ def labels_endpoint(request, project_id):
         "trainset_num_excluded",
         "trainset_num_neutral",
         "trainset_num_likely",
+        "trainset_num_decision_neighbors",
         "trainset_num_positive_preds",
         "trainset_num_negative_preds",
         "trainset_predictions_updated_at",
@@ -300,6 +308,9 @@ def predictor_update_trainset_endpoint(request, project_id):
     )
     label.trainset_num_neutral = int(payload.get("trainset_num_neutral", 1000))
     label.trainset_num_likely = int(payload.get("trainset_num_likely", 1000))
+    label.trainset_num_decision_neighbors = int(
+        payload.get("trainset_num_decision_neighbors", 50)
+    )
     label.save()
     label.update_trainset()
     return JsonResponse({"ok": True})
@@ -328,6 +339,20 @@ def predictor_fit_endpoint(request, project_id):
     label.save()
     label.fit_predictor()
     return JsonResponse({"ok": True})
+
+
+# Finetunes Endpoints
+@csrf_exempt
+@require_POST
+def finetunes_endpoint(request, project_id):
+    payload = {} if request.body is None else json.loads(request.body)
+    label_id = payload.get("label_id")
+    assert label_id, "label_id is required"
+    finetunes_qs = LabelFinetune.objects.filter(label_id=label_id).values(
+        "id", "config_name", "eval_results"
+    )
+    finetunes = {row["id"]: row for row in finetunes_qs}
+    return JsonResponse({"finetunes": finetunes})
 
 
 # Views

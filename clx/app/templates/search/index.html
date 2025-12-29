@@ -151,7 +151,7 @@
                 {% include "search/decisions_tab.html" %}
                 {% include "search/heuristics_tab.html" %}
                 {% include "search/predictor_tab.html" %}
-                <main class="flex-1 min-h-0 overflow-y-auto pb-32 px-4 -mx-4" x-show="activeTab === 'finetunes'" x-cloak></main>
+                {% include "search/finetunes_tab.html" %}
             </div>
 
             <!-- Right -->
@@ -207,12 +207,14 @@
                 activeTab: 'search',
                 heuristics: null,
                 decisions: null,
+                finetunes: null,
                 displayTags: [],
                 params: {
                     heuristic_bucket: null,
                     trainset_split: null,
                     predictor_value: null,
                     annotation_value: null,
+                    review_disagreements: false,
                     querystring: '',
                     tags: {
                         any: [],
@@ -225,6 +227,7 @@
                     numExcluded: 1000,
                     numNeutral: 1000,
                     numLikely: 1000,
+                    numDecisionNeighbors: 50,
                 },
                 predictorConfig: {
                     inferenceModel: '{{ label_class.default_inference_model }}',
@@ -596,6 +599,7 @@
                             trainset_num_excluded: this.trainsetConfig.numExcluded,
                             trainset_num_neutral: this.trainsetConfig.numNeutral,
                             trainset_num_likely: this.trainsetConfig.numLikely,
+                            trainset_num_decision_neighbors: this.trainsetConfig.numDecisionNeighbors,
                         },
                         jobName: 'Resampling Trainset',
                     });
@@ -627,14 +631,25 @@
                     await this.getTags();
                 },
 
+                // Finetunes
+                async getFinetunes(labelId = null) {
+                    const lid = labelId ?? this.activeLabelId;
+                    if (!lid) return;
+                    const data = await this.apiFetch('finetunes/', { method: 'POST', body: { label_id: lid } });
+                    if (!data) return;
+                    this.finetunes = data.finetunes || {};
+                },
+
                 // Initialization
                 async setActiveLabelId(labelId) {
                     this.activeLabelId = Number(labelId);
                     await this.getHeuristics(labelId);
                     await this.getDecisions(labelId);
+                    await this.getFinetunes(labelId);
                     this.trainsetConfig.numExcluded = this.labels?.[labelId]?.trainset_num_excluded || 1000;
                     this.trainsetConfig.numNeutral = this.labels?.[labelId]?.trainset_num_neutral || 1000;
                     this.trainsetConfig.numLikely = this.labels?.[labelId]?.trainset_num_likely || 1000;
+                    this.trainsetConfig.numDecisionNeighbors = this.labels?.[labelId]?.trainset_num_decision_neighbors || 50;
                     this.predictorConfig.inferenceModel = this.labels?.[labelId]?.inference_model || '{{ label_class.default_inference_model }}';
                     this.predictorConfig.teacherModel = this.labels?.[labelId]?.teacher_model || '{{ label_class.default_teacher_model }}';
                     this.annoTagIds.true = this.getTagsByPrefix('anno:true', true).map(t => t.id).find(id => id !== null);

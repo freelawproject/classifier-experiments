@@ -105,11 +105,24 @@
                 <template x-if="result.split">
                     <div class="my-3 rounded-md border border-gray-200 bg-gray-50 p-3">
                         <div class="flex items-center justify-between mb-1 text-xs font-medium">
-                            <div x-show="result.pred">
-                                <i class="fa-regular fa-circle-check text-green-600 me-1"></i> Predicted True
-                            </div>
-                            <div x-show="!result.pred">
-                                <i class="fa-regular fa-circle-xmark text-red-600 me-1"></i> Predicted False
+                            <div class="flex items-center gap-3">
+                                <div x-show="result.pred">
+                                    <i class="fa-regular fa-circle-check text-green-600 me-1"></i> Predicted True
+                                </div>
+                                <div x-show="!result.pred">
+                                    <i class="fa-regular fa-circle-xmark text-red-600 me-1"></i> Predicted False
+                                </div>
+                                <template x-for="ft in (Object.values(finetunes || {}))" :key="ft.id">
+                                    <span
+                                        class="inline-flex items-center rounded-full px-2 py-0.5 ring-1 ring-inset"
+                                        :class="((() => { const tagId = (getTagsByPrefix('trainset:ft:' + (ft?.config_name || ''), true).map(t => t.id).find(id => id !== null)); return tagId && (result.tags || []).includes(tagId); })()) ? 'ring-green-600 text-green-600' : 'ring-red-600 text-red-600'"
+                                    >
+                                        <i
+                                            :class="((() => { const tagId = (getTagsByPrefix('trainset:ft:' + (ft?.config_name || ''), true).map(t => t.id).find(id => id !== null)); return tagId && (result.tags || []).includes(tagId); })()) ? 'fa-regular fa-circle-check me-1' : 'fa-regular fa-circle-xmark me-1'"
+                                        ></i>
+                                        <span x-text="'FT: ' + (ft?.config_name || '')"></span>
+                                    </span>
+                                </template>
                             </div>
                             <div class="text-gray-500">
                                 Trainset: <span x-text="result.split.toLocaleUpperCase()"></span>
