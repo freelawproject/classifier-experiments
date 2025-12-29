@@ -327,6 +327,7 @@ class SearchDocumentModel(BaseModel, metaclass=SearchDocumentModelBase):
     """Search document model."""
 
     project_id = None
+    finetune_configs = {}
 
     id = models.BigIntegerField(primary_key=True)
     text = models.TextField()
