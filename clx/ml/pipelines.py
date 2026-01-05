@@ -87,6 +87,9 @@ class Pipeline:
         """Post-process a prediction."""
         return prediction
 
+    def __call__(self, *args, **kwargs):
+        return self.predict(*args, **kwargs)
+
 
 class ClassificationPipeline(Pipeline):
     """Classification pipeline."""
