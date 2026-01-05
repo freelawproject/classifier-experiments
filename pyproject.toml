@@ -47,6 +47,7 @@ dependencies = [
   "psycopg2-binary>=2.9.11",
   "python-dotenv>=1.2.1",
   "requests>=2.32.5",
+  "runpod>=1.8.1",
   "sentencepiece>=0.2.1",
   "scikit-learn>=1.7.2",
   "simplejson>=3.20.2",
@@ -65,12 +66,12 @@ dev = [
 [project.scripts]
 clx = "clx:cli.cli"
 
-[tool.setuptools]
-packages = [ "clx" ]
+[tool.setuptools.packages.find]
+include = ["clx*"]
 
 [tool.ruff]
 lint.isort.known-first-party = [
-    "ctx",
+  "clx",
 ]
 line-length = 79
 lint.extend-safe-fixes = [
