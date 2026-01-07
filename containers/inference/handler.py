@@ -22,14 +22,14 @@ def handler(event):
     start_time = datetime.now()
     inputs = event.pop("input")
     pipe = load_pipeline(inputs.pop("pipeline"))
-    texts = inputs.pop("texts")
+    examples = inputs.pop("examples")
     try:
-        results = pipe(texts, **inputs)
+        results = pipe(examples, **inputs)
         duration = (datetime.now() - start_time).total_seconds()
         return {
             "results": results,
             "seconds_elapsed": duration,
-            "num_examples": len(texts),
+            "num_examples": len(examples),
             "status": "success",
         }
     except Exception as e:
@@ -37,7 +37,7 @@ def handler(event):
         return {
             "results": None,
             "seconds_elapsed": duration,
-            "num_examples": len(texts),
+            "num_examples": len(examples),
             "status": "error",
             "error": str(e),
         }
