@@ -12,6 +12,7 @@ from .pipelines import (
     TextClassificationPipeline,
     TokenClassificationPipeline,
 )
+from .remote_pipeline import RemotePipeline
 from .token_classification_run import NERRun, TokenClassificationRun
 from .training_run import TrainingRun
 
@@ -54,8 +55,12 @@ pipeline_registry = [
 ]
 
 
-def pipeline(task: str | None = None, *args, **kwargs) -> Pipeline:
+def pipeline(
+    task: str | None = None, remote: bool = False, *args, **kwargs
+) -> Pipeline:
     """Get a pipeline instance from the registry."""
+    if remote:
+        return RemotePipeline(*args, task=task, **kwargs)
     for pipeline_class in pipeline_registry:
         if pipeline_class.task == task:
             return pipeline_class(*args, **kwargs)
