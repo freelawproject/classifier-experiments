@@ -169,7 +169,8 @@ def decision_update_endpoint(request, project_id):
     if decision.text is None:
         decision.text = (
             label.project.get_search_model()
-            .objects.get(text_hash=text_hash)
+            .objects.filter(text_hash=text_hash)
+            .first()
             .text
         )
     decision.value = value
