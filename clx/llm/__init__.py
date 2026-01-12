@@ -1,6 +1,6 @@
 from .agent import Agent, Field, Tool
 from .dspy_predictor import DSPyPredictor, GEPAPredictor, SingleLabelPredictor
-from .embed import batch_embed, count_tokens, truncate_texts
+from .embed import batch_embed, count_tokens, mesh_sort, truncate_texts
 
 __all__ = [
     "Agent",
@@ -12,4 +12,5 @@ __all__ = [
     "batch_embed",
     "count_tokens",
     "truncate_texts",
+    "mesh_sort",
 ]
