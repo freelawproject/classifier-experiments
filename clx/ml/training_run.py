@@ -15,12 +15,34 @@ from transformers import (
     Pipeline,
     PreTrainedModel,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
 )
 
 from clx.settings import CLX_HOME
 
 DEFAULT_RUN_DIR = CLX_HOME / "runs"
+
+
+class CSVLoggerCallback(TrainerCallback):
+    """Log training metrics to a CSV file."""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs:
+            return
+
+        row = {"step": state.global_step, **logs}
+        data = pd.DataFrame([row])
+
+        if self.path.exists():
+            existing = pd.read_csv(self.path)
+            data = pd.concat([existing, data], ignore_index=True)
+
+        data.to_csv(self.path, index=False)
 
 
 class TrainingRun:
@@ -156,6 +178,10 @@ class TrainingRun:
             )
         return self._pipe
 
+    def load_callbacks(self) -> list[TrainerCallback]:
+        """Add callbacks to the trainer."""
+        return [CSVLoggerCallback(self.checkpoint_dir / "logs.csv")]
+
     def train(
         self,
         train_data: pd.DataFrame,
@@ -217,6 +243,7 @@ class TrainingRun:
             "train_dataset": train_dataset,
             "compute_metrics": self.compute_metrics,
             "data_collator": self.load_data_collator(),
+            "callbacks": self.load_callbacks(),
         }
         if eval_dataset is not None:
             trainer_args["eval_dataset"] = eval_dataset
