@@ -1,4 +1,5 @@
 import lmdb
+import numpy as np
 import pandas as pd
 import simplejson as json
 from django.apps import apps
@@ -7,7 +8,7 @@ from django.utils import timezone
 from tqdm import tqdm
 
 from clx import label2slug
-from clx.llm import GEPAPredictor, SingleLabelPredictor, batch_embed
+from clx.llm import GEPAPredictor, SingleLabelPredictor, batch_embed, mesh_sort
 from clx.settings import CLX_HOME
 
 from .custom_heuristics import custom_heuristics
@@ -182,26 +183,40 @@ class Label(BaseModel):
         # Sample decision neighbors
         model = self.project.get_search_model()
         for decision in self.decisions.all():
-            embedding = model.objects.get(
-                text_hash=decision.text_hash
-            ).embedding.to_list()
+            embedding = (
+                model.objects.filter(text_hash=decision.text_hash)
+                .first()
+                .embedding.to_list()
+            )
             decision_examples = model.objects.search(
                 semantic_sort=embedding,
                 page_size=int(self.trainset_num_decision_neighbors * ratio),
             )
             data += [{"id": x["id"]} for x in decision_examples["data"]]
 
+        def apply_mesh_sort(queryset, n_examples):
+            """Select 10x the number of examples and take most diverse 10%"""
+            cluster_ks = [10, 10]
+            data = queryset.order_by("?").values("id", "embedding")
+            data = pd.DataFrame(data[: n_examples * 10])
+            data["embedding"] = data["embedding"].apply(lambda x: x.to_list())
+            data["sort"] = mesh_sort(
+                np.array(data["embedding"].tolist()), cluster_ks
+            )
+            data = data.sort_values(by="sort").head(n_examples)
+            return data[["id"]].to_dict("records")
+
         # Sample heuristic buckets
-        excluded_examples = self.excluded_query().order_by("?").values("id")
-        data += list(
-            excluded_examples[: int(self.trainset_num_excluded * ratio)]
+        data += apply_mesh_sort(
+            self.excluded_query(), int(self.trainset_num_excluded * ratio)
         )
-        neutral_examples = self.neutral_query().order_by("?").values("id")
-        data += list(
-            neutral_examples[: int(self.trainset_num_neutral * ratio)]
+        data += apply_mesh_sort(
+            self.neutral_query(), int(self.trainset_num_neutral * ratio)
         )
-        likely_examples = self.likely_query().order_by("?").values("id")
-        data += list(likely_examples[: int(self.trainset_num_likely * ratio)])
+        data += apply_mesh_sort(
+            self.likely_query(), int(self.trainset_num_likely * ratio)
+        )
+
         data = pd.DataFrame(data).drop_duplicates(subset="id").sample(frac=1)
         return data["id"].tolist()
 
@@ -234,31 +249,49 @@ class Label(BaseModel):
         self.trainset_updated_at = timezone.now()
         self.save()
 
+    def load_annos(self):
+        project = self.project
+        search_model = project.get_search_model()
+
+        pos_annos = search_model.objects.tags(
+            any=[self.anno_true_tag.id]
+        ).values("text_hash", "text")
+        pos_annos = pd.DataFrame(pos_annos)
+        pos_annos["value"] = True
+
+        neg_annos = search_model.objects.tags(
+            any=[self.anno_false_tag.id]
+        ).values("text_hash", "text")
+        neg_annos = pd.DataFrame(neg_annos)
+        neg_annos["value"] = False
+
+        flag_annos = search_model.objects.tags(
+            any=[self.anno_flag_tag.id]
+        ).values("text_hash", "text")
+        flag_annos = pd.DataFrame(flag_annos)
+        flag_annos["value"] = None
+
+        annos = pd.concat([pos_annos, neg_annos, flag_annos])
+        return annos
+
     def load_trainset(self):
         data = pd.DataFrame(
             self.trainset_examples.all().values(
                 "text_hash", "text", "split", "pred", "reason"
             )
         )
-        project = self.project
-        search_model = project.get_search_model()
-        pos_annos = search_model.objects.tags(
-            any=[self.anno_true_tag.id]
-        ).values("text_hash", "text")
-        pos_annos = pd.DataFrame(pos_annos)
-        pos_annos["split"], pos_annos["pred"] = "train", True
-        neg_annos = search_model.objects.tags(
-            any=[self.anno_false_tag.id]
-        ).values("text_hash", "text")
-        neg_annos = pd.DataFrame(neg_annos)
-        neg_annos["split"], neg_annos["pred"] = "train", False
-        data = pd.concat([data, pos_annos, neg_annos])
+
+        annos = self.load_annos()
+        flagged_hashes = annos[annos["value"].isna()]["text_hash"].tolist()
+        annos = annos[~annos["value"].isna()]
+        annos = annos.rename(columns={"value": "pred"})
+        annos["split"] = "train"
+        data = pd.concat([data, annos])
+
         if len(data) and "text_hash" in data.columns:
             data = data.drop_duplicates(subset="text_hash", keep="last")
-            flag_hashes = search_model.objects.tags(
-                any=[self.anno_flag_tag.id]
-            ).values_list("text_hash", flat=True)
-            data = data[~data["text_hash"].isin(flag_hashes)]
+            data = data[~data["text_hash"].isin(flagged_hashes)]
+
         data = data.sample(frac=1, random_state=42)
         data = data.reset_index(drop=True)
         return data
@@ -274,9 +307,10 @@ class Label(BaseModel):
         examples = self.trainset_examples.all()
         examples = {e.text_hash: e for e in examples}
         for row in trainset.to_dict("records"):
-            example = examples[row["text_hash"]]
-            example.pred = row["pred"]
-            example.reason = row["reason"]
+            if row["text_hash"] in examples:
+                example = examples[row["text_hash"]]
+                example.pred = row["pred"]
+                example.reason = row["reason"]
         LabelTrainsetExample.objects.bulk_update(
             list(examples.values()),
             fields=["pred", "reason"],

@@ -1,7 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import numpy as np
 import tiktoken
 from litellm import embedding
+from sklearn.cluster import KMeans
 from tqdm import tqdm
 
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -64,3 +66,51 @@ def batch_embed(
             for r in futures:
                 embeddings.extend([x["embedding"] for x in r.result()["data"]])
     return embeddings
+
+
+def mesh_sort(embeddings, cluster_ks):
+    """Produce a diversity-maximizing ordering of embeddings via hierarchical clustering.
+
+    This constructs a hierarchical KMeans partitioning using successive values in
+    `cluster_ks`. The first K is applied globally; each subsequent K is applied
+    independently within each existing cluster. Each example is assigned a
+    cluster “path” across levels.
+
+    The final ordering interleaves examples breadth-first across these paths,
+    so that early indices span coarse clusters before finer subdivisions.
+    Redundant or over-represented regions of the embedding space are therefore
+    pushed toward the end. Ordering within identical paths is randomized.
+
+    Returns an array of indices such that `embeddings[indices]` is diversity-ordered.
+    """
+    if not isinstance(cluster_ks, list) or not all(
+        isinstance(x, int) for x in cluster_ks
+    ):
+        raise ValueError("clusters must be a list of integers")
+    if not len(embeddings):
+        return np.array([])
+    sort = None
+    for k in cluster_ks:
+        if sort is None:
+            use_k = min(k, len(embeddings))
+            if use_k:
+                sort = KMeans(n_clusters=use_k).fit_predict(embeddings)
+                sort = np.vectorize(lambda x: str(x).zfill(6))(sort)
+        else:
+            cluster_ids = np.zeros_like(sort)
+            for group in list(set(sort)):
+                use_k = min(k, len(embeddings[sort == group]))
+                if use_k:
+                    kmeans = KMeans(n_clusters=use_k)
+                    cluster_ids[sort == group] = kmeans.fit_predict(
+                        embeddings[sort == group]
+                    )
+            cluster_ids = np.vectorize(lambda x: str(x).zfill(6))(cluster_ids)
+            sort = cluster_ids + "-" + sort
+    r = np.zeros_like(sort)
+    for group in list(set(sort)):
+        rng = np.random.default_rng()
+        r[sort == group] = rng.permutation(len(sort[sort == group]))
+    r = np.vectorize(lambda x: str(x).zfill(6))(r)
+    sort = r + "-" + sort
+    return sort.argsort()

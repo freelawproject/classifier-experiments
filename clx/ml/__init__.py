@@ -14,7 +14,7 @@ from .pipelines import (
 )
 from .remote_pipeline import RemotePipeline
 from .token_classification_run import NERRun, TokenClassificationRun
-from .training_run import TrainingRun
+from .training_run import CSVLoggerCallback, TrainingRun
 
 task_registry = [
     ClassificationRun,
@@ -73,6 +73,7 @@ __all__ = [
     "training_run",
     "task_registry",
     "TrainingRun",
+    "CSVLoggerCallback",
     "ClassificationRun",
     "MultiLabelClassificationRun",
     "Pipeline",
