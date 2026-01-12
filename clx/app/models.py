@@ -1,4 +1,5 @@
 import lmdb
+import numpy as np
 import pandas as pd
 import simplejson as json
 from django.apps import apps
@@ -7,7 +8,7 @@ from django.utils import timezone
 from tqdm import tqdm
 
 from clx import label2slug
-from clx.llm import GEPAPredictor, SingleLabelPredictor, batch_embed
+from clx.llm import GEPAPredictor, SingleLabelPredictor, batch_embed, mesh_sort
 from clx.settings import CLX_HOME
 
 from .custom_heuristics import custom_heuristics
@@ -182,26 +183,40 @@ class Label(BaseModel):
         # Sample decision neighbors
         model = self.project.get_search_model()
         for decision in self.decisions.all():
-            embedding = model.objects.get(
-                text_hash=decision.text_hash
-            ).embedding.to_list()
+            embedding = (
+                model.objects.filter(text_hash=decision.text_hash)
+                .first()
+                .embedding.to_list()
+            )
             decision_examples = model.objects.search(
                 semantic_sort=embedding,
                 page_size=int(self.trainset_num_decision_neighbors * ratio),
             )
             data += [{"id": x["id"]} for x in decision_examples["data"]]
 
+        def apply_mesh_sort(queryset, n_examples):
+            """Select 10x the number of examples and take most diverse 10%"""
+            cluster_ks = [10, 10]
+            data = queryset.order_by("?").values("id", "embedding")
+            data = pd.DataFrame(data[: n_examples * 10])
+            data["embedding"] = data["embedding"].apply(lambda x: x.to_list())
+            data["sort"] = mesh_sort(
+                np.array(data["embedding"].tolist()), cluster_ks
+            )
+            data = data.sort_values(by="sort").head(n_examples)
+            return data[["id"]].to_dict("records")
+
         # Sample heuristic buckets
-        excluded_examples = self.excluded_query().order_by("?").values("id")
-        data += list(
-            excluded_examples[: int(self.trainset_num_excluded * ratio)]
+        data += apply_mesh_sort(
+            self.excluded_query(), int(self.trainset_num_excluded * ratio)
         )
-        neutral_examples = self.neutral_query().order_by("?").values("id")
-        data += list(
-            neutral_examples[: int(self.trainset_num_neutral * ratio)]
+        data += apply_mesh_sort(
+            self.neutral_query(), int(self.trainset_num_neutral * ratio)
         )
-        likely_examples = self.likely_query().order_by("?").values("id")
-        data += list(likely_examples[: int(self.trainset_num_likely * ratio)])
+        data += apply_mesh_sort(
+            self.likely_query(), int(self.trainset_num_likely * ratio)
+        )
+
         data = pd.DataFrame(data).drop_duplicates(subset="id").sample(frac=1)
         return data["id"].tolist()
 
