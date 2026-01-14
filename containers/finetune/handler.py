@@ -1,4 +1,5 @@
 import tempfile
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
@@ -16,7 +17,7 @@ class RunPodProgressCallback(TrainerCallback):
     """Report training progress to RunPod."""
 
     def __init__(self, event):
-        self.event = event
+        self.event = deepcopy(event)
 
     def on_step_end(self, args, state, control, **kwargs):
         if state.max_steps > 0:
@@ -84,6 +85,7 @@ def handler(event):
             pass
 
         duration = (datetime.now() - start_time).total_seconds()
+        raise e
         return {
             "status": "error",
             "seconds_elapsed": duration,

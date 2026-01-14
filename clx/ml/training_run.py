@@ -362,7 +362,7 @@ class TrainingRun:
         pbar = None
 
         try:
-            while True:
+            while 1:
                 status_response = requests.get(
                     f"https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}",
                     headers={"Authorization": f"Bearer {api_key}"},
@@ -370,7 +370,7 @@ class TrainingRun:
                 status_response.raise_for_status()
                 status_data = status_response.json()
 
-                progress = status_data.get("progress", {})
+                progress = status_data.get("output", {})
                 if progress and "max_steps" in progress:
                     if pbar is None:
                         pbar = tqdm(
