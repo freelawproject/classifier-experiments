@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/pytorch:25.12-py3
+FROM runpod/pytorch:1.0.3-cu1281-torch290-ubuntu2204
 
 WORKDIR /
 
