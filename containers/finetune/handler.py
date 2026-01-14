@@ -6,9 +6,30 @@ import pandas as pd
 import runpod
 import simplejson as json
 import torch
+from transformers import TrainerCallback
 
+from clx import S3
 from clx.ml import training_run
-from clx.utils import S3
+
+
+class RunPodProgressCallback(TrainerCallback):
+    """Report training progress to RunPod."""
+
+    def __init__(self, event):
+        self.event = event
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.max_steps > 0:
+            progress = int((state.global_step / state.max_steps) * 100)
+            runpod.serverless.progress_update(
+                self.event,
+                {
+                    "progress": progress,
+                    "step": state.global_step,
+                    "max_steps": state.max_steps,
+                    "epoch": state.epoch,
+                },
+            )
 
 
 def handler(event):
@@ -34,7 +55,13 @@ def handler(event):
         s3.delete_prefix(s3_prefix)
 
         run = training_run(**training_run_args)
-        run.train(train_data, eval_data, overwrite=overwrite)
+        progress_callback = RunPodProgressCallback(event)
+        run.train(
+            train_data,
+            eval_data,
+            overwrite=overwrite,
+            callbacks=[progress_callback],
+        )
 
         results = {}
         if run.results_path.exists():
