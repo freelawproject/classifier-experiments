@@ -3,6 +3,7 @@ import hashlib
 import os
 from pathlib import Path
 
+import boto3
 import django
 import pandas as pd
 import regex as re
@@ -134,3 +135,62 @@ def extract_attachments(text):
             )
         span["attachments"] = attachments
     return spans
+
+
+class S3:
+    """S3 client wrapper for upload/download/delete operations."""
+
+    def __init__(self, bucket: str | None = None):
+        self.bucket = bucket or os.getenv("CLX_S3_BUCKET")
+        if not self.bucket:
+            raise ValueError(
+                "S3 bucket must be provided or set via CLX_S3_BUCKET env var"
+            )
+        self._client = None
+
+    @property
+    def client(self):
+        """Lazy-loaded boto3 S3 client."""
+        if self._client is None:
+            self._client = boto3.client(
+                "s3",
+                endpoint_url=os.getenv("CLX_S3_ENDPOINT_URL"),
+                aws_access_key_id=os.getenv("CLX_S3_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("CLX_S3_SECRET_ACCESS_KEY"),
+                region_name=os.getenv("CLX_S3_REGION"),
+            )
+        return self._client
+
+    def ping(self) -> bool:
+        """Test connection to S3 bucket. Returns True if successful."""
+        try:
+            self.client.head_bucket(Bucket=self.bucket)
+            return True
+        except Exception:
+            return False
+
+    def upload(self, local_path: Path | str, key: str) -> str:
+        """Upload file to S3. Returns S3 URI."""
+        self.client.upload_file(str(local_path), self.bucket, key)
+        return f"s3://{self.bucket}/{key}"
+
+    def download(self, key: str, local_path: Path | str) -> Path:
+        """Download file from S3 to local path."""
+        local_path = Path(local_path)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        self.client.download_file(self.bucket, key, str(local_path))
+        return local_path
+
+    def delete(self, key: str) -> None:
+        """Delete single object from S3."""
+        self.client.delete_object(Bucket=self.bucket, Key=key)
+
+    def delete_prefix(self, prefix: str) -> None:
+        """Delete all objects under an S3 prefix."""
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+            objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+            if objects:
+                self.client.delete_objects(
+                    Bucket=self.bucket, Delete={"Objects": objects}
+                )
