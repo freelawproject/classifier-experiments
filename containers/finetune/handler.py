@@ -9,7 +9,7 @@ import simplejson as json
 import torch
 from transformers import TrainerCallback
 
-from clx import S3
+from clx import CLX_HOME, S3
 from clx.ml import training_run
 
 
@@ -56,6 +56,8 @@ def handler(event):
         s3.delete_prefix(s3_prefix)
 
         run = training_run(**training_run_args)
+        print(CLX_HOME)
+        print(run.run_dir)
         progress_callback = RunPodProgressCallback(event)
         run.train(
             train_data,
@@ -85,7 +87,6 @@ def handler(event):
             pass
 
         duration = (datetime.now() - start_time).total_seconds()
-        raise e
         return {
             "status": "error",
             "seconds_elapsed": duration,
