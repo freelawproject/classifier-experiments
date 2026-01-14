@@ -11,6 +11,7 @@ if config_path.exists():
         load_dotenv(override=False)
 
 from .utils import (
+    S3,
     download_file,
     extract_attachments,
     extract_bz2_file,
@@ -31,4 +32,5 @@ __all__ = [
     "extract_attachments",
     "generate_hash",
     "autoload_env",
+    "S3",
 ]
