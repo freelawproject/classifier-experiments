@@ -181,6 +181,20 @@ class S3:
         self.client.download_file(self.bucket, key, str(local_path))
         return local_path
 
+    def download_prefix(self, prefix: str, local_dir: Path | str) -> Path:
+        """Download all objects under an S3 prefix to a local directory."""
+        local_dir = Path(local_dir)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                relative_path = key[len(prefix) :].lstrip("/")
+                if relative_path:
+                    local_path = local_dir / relative_path
+                    self.download(key, local_path)
+        return local_dir
+
     def delete(self, key: str) -> None:
         """Delete single object from S3."""
         self.client.delete_object(Bucket=self.bucket, Key=key)
