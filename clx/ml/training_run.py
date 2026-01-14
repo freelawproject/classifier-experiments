@@ -1,12 +1,18 @@
 import gc
+import os
 import shutil
+import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import ClassVar
 
 import pandas as pd
+import requests
 import simplejson as json
 import torch
 from datasets import Dataset
+from tqdm import tqdm
 from transformers import (
     AutoModel,
     AutoTokenizer,
@@ -178,10 +184,6 @@ class TrainingRun:
             )
         return self._pipe
 
-    def load_callbacks(self) -> list[TrainerCallback]:
-        """Add callbacks to the trainer."""
-        return [CSVLoggerCallback(self.checkpoint_dir / "logs.csv")]
-
     def train(
         self,
         train_data: pd.DataFrame,
@@ -189,8 +191,27 @@ class TrainingRun:
         overwrite: bool = False,
         resume_from_checkpoint: str | bool | None = None,
         lazy_tokenize: bool = False,
+        callbacks: list[TrainerCallback] | None = None,
+        remote: bool = False,
+        endpoint_id: str | None = None,
+        api_key: str | None = None,
+        s3_bucket: str | None = None,
+        poll_interval: int = 30,
+        timeout: int = 3600,
     ):
         """Run the training run."""
+        if remote:
+            return self.train_remote(
+                train_data=train_data,
+                eval_data=eval_data,
+                overwrite=overwrite,
+                endpoint_id=endpoint_id,
+                api_key=api_key,
+                s3_bucket=s3_bucket,
+                poll_interval=poll_interval,
+                timeout=timeout,
+            )
+
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if the checkpoint directory exists and is not empty
@@ -225,6 +246,9 @@ class TrainingRun:
             None if eval_data is None else prepare_dataset(eval_data)
         )
 
+        if callbacks is None:
+            callbacks = [CSVLoggerCallback(self.checkpoint_dir / "logs.csv")]
+
         # Prepare the training arguments
         training_args = {
             "output_dir": self.checkpoint_dir,
@@ -236,6 +260,7 @@ class TrainingRun:
             **self.training_args,
         }
         training_args = TrainingArguments(**training_args)
+
         # Prepare the trainer
         trainer_args = {
             "model": self.base_model,
@@ -243,7 +268,7 @@ class TrainingRun:
             "train_dataset": train_dataset,
             "compute_metrics": self.compute_metrics,
             "data_collator": self.load_data_collator(),
-            "callbacks": self.load_callbacks(),
+            "callbacks": callbacks,
         }
         if eval_dataset is not None:
             trainer_args["eval_dataset"] = eval_dataset
@@ -275,6 +300,106 @@ class TrainingRun:
         del trainer
         gc.collect()
         torch.cuda.empty_cache()
+
+    def train_remote(
+        self,
+        train_data: pd.DataFrame,
+        eval_data: pd.DataFrame | None = None,
+        overwrite: bool = False,
+        endpoint_id: str | None = None,
+        api_key: str | None = None,
+        s3_bucket: str | None = None,
+        poll_interval: int = 30,
+        timeout: int = 3600,
+    ) -> dict:
+        """Submit remote training job to RunPod."""
+        from clx.utils import S3
+
+        endpoint_id = endpoint_id or os.getenv("RUNPOD_FINETUNE_ENDPOINT_ID")
+        api_key = api_key or os.getenv("RUNPOD_API_KEY")
+
+        if not endpoint_id or not api_key:
+            raise ValueError(
+                "RUNPOD_FINETUNE_ENDPOINT_ID and RUNPOD_API_KEY must be set"
+            )
+
+        s3 = S3(bucket=s3_bucket)
+        job_key = str(uuid.uuid4())
+        s3_prefix = f"runpod/finetune/{job_key}"
+
+        # Upload training data
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = Path(tmpdir) / "train.csv"
+            train_data.to_csv(train_path, index=False)
+            s3.upload(train_path, f"{s3_prefix}/train.csv")
+
+            if eval_data is not None:
+                eval_path = Path(tmpdir) / "eval.csv"
+                eval_data.to_csv(eval_path, index=False)
+                s3.upload(eval_path, f"{s3_prefix}/eval.csv")
+
+        # Build payload
+        payload = {
+            "input": {
+                "training_run": self.config,
+                "s3_bucket": s3.bucket,
+                "s3_prefix": s3_prefix,
+                "overwrite": overwrite,
+            }
+        }
+
+        # Submit job
+        response = requests.post(
+            f"https://api.runpod.ai/v2/{endpoint_id}/run",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+        )
+        response.raise_for_status()
+        job_id = response.json()["id"]
+
+        # Check progress
+        start_time = time.time()
+        pbar = None
+
+        try:
+            while True:
+                status_response = requests.get(
+                    f"https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                status_response.raise_for_status()
+                status_data = status_response.json()
+
+                progress = status_data.get("progress", {})
+                if progress and "max_steps" in progress:
+                    if pbar is None:
+                        pbar = tqdm(
+                            total=progress["max_steps"],
+                            desc="Finetuning",
+                            unit="step",
+                        )
+                    pbar.n = progress.get("step", 0)
+                    pbar.refresh()
+
+                if status_data["status"] == "COMPLETED":
+                    if pbar is not None:
+                        pbar.n = pbar.total
+                        pbar.refresh()
+                    return status_data["output"]
+                elif status_data["status"] in ("FAILED", "CANCELLED"):
+                    raise RuntimeError(
+                        f"Training job failed: {status_data.get('error', 'Unknown error')}"
+                    )
+
+                if time.time() - start_time > timeout:
+                    raise TimeoutError(
+                        f"Training job timed out after {timeout} seconds"
+                    )
+
+                time.sleep(poll_interval)
+        finally:
+            if pbar is not None:
+                pbar.close()
 
     def predict(self, *args, **kwargs) -> list[dict]:
         """Run predictions with pipeline."""
