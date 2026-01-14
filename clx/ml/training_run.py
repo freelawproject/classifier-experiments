@@ -196,7 +196,7 @@ class TrainingRun:
         endpoint_id: str | None = None,
         api_key: str | None = None,
         s3_bucket: str | None = None,
-        poll_interval: int = 30,
+        poll_interval: int = 5,
         timeout: int = 3600,
     ):
         """Run the training run."""
@@ -309,7 +309,7 @@ class TrainingRun:
         endpoint_id: str | None = None,
         api_key: str | None = None,
         s3_bucket: str | None = None,
-        poll_interval: int = 30,
+        poll_interval: int = 5,
         timeout: int = 3600,
     ) -> dict:
         """Submit remote training job to RunPod."""

@@ -83,7 +83,7 @@ The `train()` method with `remote=True` supports the following additional argume
 - `endpoint_id`: Override the RunPod endpoint ID (defaults to `RUNPOD_FINETUNE_ENDPOINT_ID` env var).
 - `api_key`: Override the RunPod API key (defaults to `RUNPOD_API_KEY` env var).
 - `s3_bucket`: Override the S3 bucket (defaults to `CLX_S3_BUCKET` env var).
-- `poll_interval`: Seconds between status checks. Defaults to 30.
+- `poll_interval`: Seconds between status checks. Defaults to 5.
 - `timeout`: Maximum seconds to wait for completion. Defaults to 3600 (1 hour).
 
 ## Data Transfer
