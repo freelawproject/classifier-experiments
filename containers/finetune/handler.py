@@ -9,8 +9,9 @@ import simplejson as json
 import torch
 from transformers import TrainerCallback
 
-from clx import CLX_HOME, S3
+from clx import S3
 from clx.ml import training_run
+from clx.settings import CLX_HOME
 
 
 class RunPodProgressCallback(TrainerCallback):
