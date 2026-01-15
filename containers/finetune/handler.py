@@ -11,7 +11,6 @@ from transformers import TrainerCallback
 
 from clx import S3
 from clx.ml import training_run
-from clx.settings import CLX_HOME
 
 
 class RunPodProgressCallback(TrainerCallback):
@@ -57,8 +56,6 @@ def handler(event):
         s3.delete_prefix(s3_prefix)
 
         run = training_run(**training_run_args)
-        print(CLX_HOME)
-        print(run.run_dir)
         progress_callback = RunPodProgressCallback(event)
         run.train(
             train_data,

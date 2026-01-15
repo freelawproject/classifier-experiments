@@ -83,7 +83,6 @@ class TrainingRun:
         self.model_dir = self.run_dir / "model"
         self.checkpoint_dir = self.run_dir / "checkpoints"
         self.results_path = self.checkpoint_dir / "results.json"
-        self.logging_dir = self.checkpoint_dir / "logs"
         self.config_path = self.run_dir / "config.json"
 
         self._tokenizer = None
@@ -252,7 +251,7 @@ class TrainingRun:
         # Prepare the training arguments
         training_args = {
             "output_dir": self.checkpoint_dir,
-            "logging_dir": self.logging_dir,
+            "logging_dir": self.checkpoint_dir / "logs",
             "logging_strategy": "steps",
             "logging_steps": 2,
             "load_best_model_at_end": True,
@@ -339,9 +338,11 @@ class TrainingRun:
                 s3.upload(eval_path, f"{s3_prefix}/eval.csv")
 
         # Build payload
+        config = self.config
+        del config["run_dir_parent"]
         payload = {
             "input": {
-                "training_run": self.config,
+                "training_run": config,
                 "s3_bucket": s3.bucket,
                 "s3_prefix": s3_prefix,
                 "overwrite": overwrite,
