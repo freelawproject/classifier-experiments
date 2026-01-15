@@ -89,3 +89,6 @@ class RemotePipeline:
         for future in futures:
             results += future.result()["results"]
         return results
+
+    def __call__(self, *args, **kwargs):
+        return self.predict(*args, **kwargs)

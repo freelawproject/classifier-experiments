@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from clx import label2slug
 from clx.llm import GEPAPredictor, SingleLabelPredictor, batch_embed, mesh_sort
+from clx.ml import pipeline
 from clx.settings import CLX_HOME
 
 from .custom_heuristics import custom_heuristics
@@ -471,6 +472,14 @@ class Label(BaseModel):
         self.save()
         print(predictor.last_cost)
 
+    def get_finetune_run_name(self, config_name):
+        return f"{self.project_id}__{label2slug(self.name)}__{config_name}"
+
+    def get_finetune_run_pipe(self, config_name):
+        run_name = self.get_finetune_run_name(config_name)
+        model_path = f"/runpod-volume/clx/runs/{run_name}/model"
+        return pipeline(task="classification", model=model_path, remote=True)
+
     def prepare_finetune(
         self, config_name, batch_size=16, gradient_accumulation_steps=1
     ):
@@ -487,7 +496,8 @@ class Label(BaseModel):
         train_data = data[data["split"] == "train"]
         eval_data = data[data["split"] == "eval"]
 
-        num_train_epochs = 1
+        num_train_epochs = config["training_args"].get("num_train_epochs", 1)
+        config["training_args"]["num_train_epochs"] = num_train_epochs
         total_steps = (num_train_epochs * len(train_data)) // (
             batch_size * gradient_accumulation_steps
         )
@@ -504,6 +514,7 @@ class Label(BaseModel):
 
         run_config = {
             "task": "classification",
+            "run_name": self.get_finetune_run_name(config_name),
             "label_names": ["yes", "no"],
             **config,
         }
@@ -707,14 +718,7 @@ class DocketEntry(SearchDocumentModel):
     project_id = "docket-entry"
     finetune_configs = {
         "underfit": {
-            "base_model_name": str(
-                CLX_HOME
-                / "projects"
-                / "docketbert"
-                / "runs"
-                / "docketbert-large-395M"
-                / "model"
-            ),
+            "base_model_name": "answerdotai/ModernBERT-base",
             "training_args": {
                 "num_train_epochs": 1,
                 "learning_rate": 5e-5,
@@ -723,14 +727,7 @@ class DocketEntry(SearchDocumentModel):
             },
         },
         "main": {
-            "base_model_name": str(
-                CLX_HOME
-                / "projects"
-                / "docketbert"
-                / "runs"
-                / "docketbert-large-395M"
-                / "model"
-            ),
+            "base_model_name": "answerdotai/ModernBERT-base",
             "training_args": {
                 "num_train_epochs": 10,
                 "learning_rate": 5e-5,
