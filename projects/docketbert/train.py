@@ -239,12 +239,12 @@ def get_experiment_config(experiment, batch_size=None):
         }
         default_batch_size = 8
     elif experiment == "final-base-150M":
-        config["training_args"]["max_steps"] = 40761591
+        config["training_args"]["max_steps"] = 40761591 // 256
         config["use_full_data"] = True
         default_batch_size = 16
     elif experiment == "final-large-395M":
         config["base_model_name"] = "answerdotai/ModernBERT-large"
-        config["training_args"]["max_steps"] = 40761591
+        config["training_args"]["max_steps"] = 40761591 // 256
         config["use_full_data"] = True
         default_batch_size = 8
     elif experiment == "final-sliced-175M":
@@ -256,7 +256,7 @@ def get_experiment_config(experiment, batch_size=None):
             [0, 3, 6, 9, 12, 15, 18, 21, 24, 27],
             base_model_name,
         )
-        config["training_args"]["max_steps"] = 40761591
+        config["training_args"]["max_steps"] = 40761591 // 256
         config["use_full_data"] = True
     else:
         raise ValueError(f"Invalid experiment: {experiment}")

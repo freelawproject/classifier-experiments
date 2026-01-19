@@ -13,6 +13,8 @@ if __name__ == "__main__":
     local = CLX_HOME / "projects" / "docketbert"
     exclude_patterns = [
         "*.safetensors",
+        "*.pt",
+        "*.csv",
     ]
 
     cmd = [
