@@ -9,6 +9,8 @@ from clx.ml import training_run
 from clx.settings import CLX_HOME
 
 PROJECT_DIR = CLX_HOME / "projects" / "docketbert"
+EXP_DATA_PATH = CLX_HOME / "app_projects" / "docket-entry" / "docs.csv"
+FULL_DATA_PATH = PROJECT_DIR / "data" / "train.csv"
 
 
 def create_sliced_model(
@@ -35,6 +37,7 @@ def create_sliced_model(
 
 def get_experiment_config(experiment, batch_size=None):
     config = {
+        "data_path": EXP_DATA_PATH,
         "task": "mlm",
         "run_dir_parent": PROJECT_DIR / "runs",
         "base_model_name": "answerdotai/ModernBERT-base",
@@ -234,6 +237,23 @@ def get_experiment_config(experiment, batch_size=None):
             "global_attn_every_n_layers": 2,
         }
         default_batch_size = 8
+    elif experiment == "final-base-150M":
+        default_batch_size = 16
+        config["data_path"] = FULL_DATA_PATH
+    elif experiment == "final-large-395M":
+        config["base_model_name"] = "answerdotai/ModernBERT-large"
+        default_batch_size = 8
+        config["data_path"] = FULL_DATA_PATH
+    elif experiment == "final-sliced-175M":
+        base_model_name = (
+            PROJECT_DIR / "runs" / "docketbert-final-large-395M" / "model"
+        )
+        config["base_model_name"] = create_sliced_model(
+            "final-sliced-large-ft-interleaved-10l",
+            [0, 3, 6, 9, 12, 15, 18, 21, 24, 27],
+            base_model_name,
+        )
+        config["data_path"] = FULL_DATA_PATH
     else:
         raise ValueError(f"Invalid experiment: {experiment}")
 
@@ -308,7 +328,6 @@ def train_docketbert(
     overwrite, resume, check_params, mem_test, experiment, batch_size, exit
 ):
     """Train a docket language model."""
-    from clx.models import DocketEntry
 
     try:
         if resume and overwrite:
@@ -316,16 +335,18 @@ def train_docketbert(
                 "Cannot use --resume and --overwrite together."
             )
 
+        config = get_experiment_config(experiment, batch_size)
+
+        data_path = config.pop("data_path")
+
         data = pd.read_csv(
-            DocketEntry.get_project().cached_documents_path,
+            data_path,
             usecols=["text"],
             nrows=200000 if mem_test else None,
         )
         data = data.sample(frac=1, random_state=42)
         train_data = data.head(-100000)
         eval_data = data.tail(100000)
-
-        config = get_experiment_config(experiment, batch_size)
 
         if mem_test:
             config["tokenize_args"]["padding"] = "max_length"
