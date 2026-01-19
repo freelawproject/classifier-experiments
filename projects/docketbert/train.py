@@ -10,7 +10,8 @@ from clx.settings import CLX_HOME
 
 PROJECT_DIR = CLX_HOME / "projects" / "docketbert"
 EXP_DATA_PATH = CLX_HOME / "app_projects" / "docket-entry" / "docs.csv"
-FULL_DATA_PATH = PROJECT_DIR / "data" / "train.csv"
+FULL_DATA_TRAIN_PATH = PROJECT_DIR / "data" / "train.csv"
+FULL_DATA_EVAL_PATH = PROJECT_DIR / "data" / "eval.csv"
 
 
 def create_sliced_model(
@@ -37,7 +38,7 @@ def create_sliced_model(
 
 def get_experiment_config(experiment, batch_size=None):
     config = {
-        "data_path": EXP_DATA_PATH,
+        "use_full_data": False,
         "task": "mlm",
         "run_dir_parent": PROJECT_DIR / "runs",
         "base_model_name": "answerdotai/ModernBERT-base",
@@ -238,12 +239,14 @@ def get_experiment_config(experiment, batch_size=None):
         }
         default_batch_size = 8
     elif experiment == "final-base-150M":
+        config["training_args"]["max_steps"] = 40761591
+        config["use_full_data"] = True
         default_batch_size = 16
-        config["data_path"] = FULL_DATA_PATH
     elif experiment == "final-large-395M":
         config["base_model_name"] = "answerdotai/ModernBERT-large"
+        config["training_args"]["max_steps"] = 40761591
+        config["use_full_data"] = True
         default_batch_size = 8
-        config["data_path"] = FULL_DATA_PATH
     elif experiment == "final-sliced-175M":
         base_model_name = (
             PROJECT_DIR / "runs" / "docketbert-final-large-395M" / "model"
@@ -253,7 +256,8 @@ def get_experiment_config(experiment, batch_size=None):
             [0, 3, 6, 9, 12, 15, 18, 21, 24, 27],
             base_model_name,
         )
-        config["data_path"] = FULL_DATA_PATH
+        config["training_args"]["max_steps"] = 40761591
+        config["use_full_data"] = True
     else:
         raise ValueError(f"Invalid experiment: {experiment}")
 
@@ -337,16 +341,20 @@ def train_docketbert(
 
         config = get_experiment_config(experiment, batch_size)
 
-        data_path = config.pop("data_path")
+        use_full_data = config.pop("use_full_data")
 
-        data = pd.read_csv(
-            data_path,
-            usecols=["text"],
-            nrows=200000 if mem_test else None,
-        )
-        data = data.sample(frac=1, random_state=42)
-        train_data = data.head(-100000)
-        eval_data = data.tail(100000)
+        if use_full_data:
+            train_data = FULL_DATA_TRAIN_PATH
+            eval_data = FULL_DATA_EVAL_PATH
+        else:
+            data = pd.read_csv(
+                EXP_DATA_PATH,
+                usecols=["text"],
+                nrows=200000 if mem_test else None,
+            )
+            data = data.sample(frac=1, random_state=42)
+            train_data = data.head(-100000)
+            eval_data = data.tail(100000)
 
         if mem_test:
             config["tokenize_args"]["padding"] = "max_length"

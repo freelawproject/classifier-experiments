@@ -74,13 +74,11 @@ def consolidate_data():
     d3 = pd.read_csv(
         PROJECT_DIR / "data" / "search_recapdocument_descriptions.csv",
         usecols=["description"],
-    )
-    d3 = d3.rename(columns={"description": "text"})
+    ).rename(columns={"description": "text"})
     d4 = pd.read_csv(
         PROJECT_DIR / "data" / "search_docketentry_descriptions.csv",
         usecols=["description"],
-    )
-    d4 = d4.rename(columns={"description": "text"})
+    ).rename(columns={"description": "text"})
     data = pd.concat([d1, d2, d3, d4])
     data = data.drop_duplicates("text")
     data = data.sample(frac=1)
@@ -91,5 +89,7 @@ if __name__ == "__main__":
     pull_dev_data("search_docketentry", nrows=40_000_000)
     pull_dev_data("search_recapdocument", nrows=20_000_000)
     data = consolidate_data()
+    eval_data = data.tail(100000)
+    data = data.head(-100000)
     data.to_csv(PROJECT_DIR / "data" / "train.csv", index=False)
-    print(data)
+    eval_data.to_csv(PROJECT_DIR / "data" / "eval.csv", index=False)
