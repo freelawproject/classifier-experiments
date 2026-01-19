@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-git fetch origin
-git reset --hard origin/main
-pip install -e .
+apt-get update && apt-get install -y rsync
+git pull
+pip install -e '.[dev]'
 pip install flash-attn --no-build-isolation
 clx config --autoload-env on
-export CLX_HOME=/workspace/clx/home
+export CLX_HOME=/workspace/clx
 export HF_HOME=/workspace/hf
