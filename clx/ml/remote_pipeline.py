@@ -52,7 +52,7 @@ class RemotePipeline:
                     )
                     outputs = response.json()
                 except Exception as e:
-                    errors.append(str(e))
+                    outputs = {"status": "FAILED", "error": str(e)}
                 if outputs["status"] != "COMPLETED":
                     errors.append(outputs)
                 else:
