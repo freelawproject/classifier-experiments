@@ -349,13 +349,22 @@ def view_decisions(label_name: str, project_id: str = "docket-entry"):
 
 def create_decision(
     label_name: str,
-    text: str,
+    example_id: int,
     value: bool,
     reason: str,
     project_id: str = "docket-entry",
 ) -> LabelDecision:
-    """Create or update a decision."""
+    """
+    Create a decision from an example ID.
+
+    IMPORTANT: Always use example IDs from search results, not raw text.
+    This ensures the text_hash matches documents in the search table.
+    """
     label = get_label(label_name, project_id)
+    model = label.project.get_search_model()
+    example = model.objects.get(id=example_id)
+
+    text = example.text
     text_hash = generate_hash(text)
 
     decision, created = LabelDecision.objects.update_or_create(
@@ -371,27 +380,6 @@ def create_decision(
     action = "Created" if created else "Updated"
     print(f"{action} decision: {value} - {reason}")
     return decision
-
-
-def create_decision_from_id(
-    label_name: str,
-    example_id: int,
-    value: bool,
-    reason: str,
-    project_id: str = "docket-entry",
-) -> LabelDecision:
-    """Create a decision from an example ID."""
-    label = get_label(label_name, project_id)
-    model = label.project.get_search_model()
-    example = model.objects.get(id=example_id)
-
-    return create_decision(
-        label_name=label_name,
-        text=example.text,
-        value=value,
-        reason=reason,
-        project_id=project_id,
-    )
 
 
 def annotate(
@@ -421,10 +409,10 @@ def create_heuristic(
     querystring: str,
     is_minimal: bool = False,
     is_likely: bool = False,
-    apply: bool = True,
+    apply: bool = False,
     project_id: str = "docket-entry",
 ) -> LabelHeuristic:
-    """Create and optionally apply a heuristic."""
+    """Create and optionally apply a heuristic. Defaults to NOT applying."""
     label = get_label(label_name, project_id)
 
     heuristic = LabelHeuristic.objects.create(
@@ -495,3 +483,119 @@ def similar_to(label_name: str, text: str, page_size: int = 20, **kwargs):
         page_size=page_size,
         **kwargs,
     )
+
+
+def set_instructions(
+    label_name: str, instructions: str, project_id: str = "docket-entry"
+):
+    """Set the instructions for a label."""
+    label = get_label(label_name, project_id)
+    label.instructions = instructions
+    label.save()
+    print(f"Instructions saved for {label_name}")
+
+
+def view_heuristics(label_name: str, project_id: str = "docket-entry"):
+    """View all heuristics for a label."""
+    label = get_label(label_name, project_id)
+    print(f"=== Heuristics for {label_name} ===\n")
+    for h in label.heuristics.all():
+        flags = []
+        if h.is_minimal:
+            flags.append("minimal")
+        if h.is_likely:
+            flags.append("likely")
+        flag_str = f"[{', '.join(flags)}]" if flags else "[none]"
+        print(
+            f"  {flag_str} {h.querystring or f'[custom: {h.custom}]'} -> {h.num_examples:,} matches"
+        )
+
+
+def count_matches(querystring: str, project_id: str = "docket-entry") -> int:
+    """Count how many examples match a querystring without creating a heuristic."""
+    project = get_project(project_id)
+    model = project.get_search_model()
+    result = model.objects.search(
+        params={"querystring": querystring},
+        count=True,
+    )
+    return result.get("total", 0)
+
+
+def search_by_query(
+    querystring: str,
+    project_id: str = "docket-entry",
+    page: int = 1,
+    page_size: int = 20,
+) -> list[dict]:
+    """Search examples by querystring (without needing a label)."""
+    project = get_project(project_id)
+    model = project.get_search_model()
+    results = model.objects.search(
+        params={"querystring": querystring},
+        page=page,
+        page_size=page_size,
+    )
+    return [
+        {
+            "id": item["id"],
+            "text": item["text"],
+            "text_hash": item["text_hash"],
+        }
+        for item in results.get("data", [])
+    ]
+
+
+def print_search_results(results: list[dict], max_text_len: int = 120):
+    """Print search results in a compact format."""
+    for i, r in enumerate(results, 1):
+        text = r["text"]
+        if len(text) > max_text_len:
+            text = text[:max_text_len] + "..."
+        print(f"[{i}] (id={r['id']}) {text}")
+
+
+def setup_label(
+    label_name: str,
+    minimal_query: str,
+    likely_query: str,
+    instructions: str,
+    project_id: str = "docket-entry",
+    apply: bool = False,
+):
+    """Set up a label with minimal heuristic, likely heuristic, and instructions. Defaults to NOT applying."""
+    label = get_label(label_name, project_id)
+
+    # Set instructions
+    label.instructions = instructions
+    label.save()
+    print(f"Instructions saved for {label_name}")
+
+    # Create minimal heuristic
+    minimal_h = LabelHeuristic.objects.create(
+        label=label,
+        querystring=minimal_query,
+        is_minimal=True,
+    )
+    print(f"Created minimal heuristic: {minimal_query}")
+
+    # Create likely heuristic
+    likely_h = LabelHeuristic.objects.create(
+        label=label,
+        querystring=likely_query,
+        is_likely=True,
+    )
+    print(f"Created likely heuristic: {likely_query}")
+
+    if apply:
+        print("Applying heuristics...")
+        minimal_h.apply()
+        likely_h.apply()
+        label.refresh_from_db()
+        print(f"Minimal matches: {minimal_h.num_examples:,}")
+        print(f"Likely matches: {likely_h.num_examples:,}")
+        print(
+            f"Buckets - Excluded: {label.num_excluded:,}, Neutral: {label.num_neutral:,}, Likely: {label.num_likely:,}"
+        )
+
+    return label
