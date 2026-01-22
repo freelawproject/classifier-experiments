@@ -1,11 +1,14 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import click
 from tqdm import tqdm
 
 
 @click.command()
+@click.option("--update", is_flag=True, help="Update labels")
 @click.option("--predict", is_flag=True, help="Run global corpus predictions")
 @click.option("--label-name", "--label", help="Label name")
-def cleanup(predict, label_name):
+def cleanup(update, predict, label_name):
     """Sync app data."""
     from clx.models import LabelHeuristic, Project
 
@@ -42,7 +45,17 @@ def cleanup(predict, label_name):
                     print(f"Updating heuristic {heuristic.name}...")
                     heuristic.apply()
 
-        for label in project.labels.all():
-            if label_name is None or label.name == label_name:
-                print(f"Updating label {label.name}...")
-                label.update_all(predict=predict)
+        def update_label(label, predict):
+            print(f"Updating label {label.name}...")
+            label.update_all(predict=predict, num_threads=32)
+
+        if update:
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = []
+                for label in project.labels.all().order_by("name"):
+                    if label_name is None or label.name == label_name:
+                        futures.append(
+                            executor.submit(update_label, label, predict)
+                        )
+                for _ in tqdm(as_completed(futures), total=len(futures)):
+                    pass
