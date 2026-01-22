@@ -11,7 +11,7 @@ import pandas as pd
 import requests
 import simplejson as json
 import torch
-from datasets import Dataset
+from datasets import Dataset, IterableDataset, load_dataset
 from tqdm import tqdm
 from transformers import (
     AutoModel,
@@ -185,8 +185,8 @@ class TrainingRun:
 
     def train(
         self,
-        train_data: pd.DataFrame,
-        eval_data: pd.DataFrame | None = None,
+        train_data: pd.DataFrame | Path | str,
+        eval_data: pd.DataFrame | Path | str | None = None,
         overwrite: bool = False,
         resume_from_checkpoint: str | bool | None = None,
         lazy_tokenize: bool = False,
@@ -223,13 +223,25 @@ class TrainingRun:
                     "Please delete it or set `overwrite=True` to overwrite it.",
                 )
 
-        # Validate the input data format
-        self.validate_data_format(train_data)
-        if eval_data is not None:
-            self.validate_data_format(eval_data)
-
         # Prepare the datasets
-        def prepare_dataset(data: pd.DataFrame) -> Dataset:
+        def prepare_dataset(
+            data: pd.DataFrame | Path | str,
+        ) -> Dataset | IterableDataset:
+            if isinstance(data, str | Path):
+                dataset = load_dataset(
+                    "csv",
+                    data_files=str(data),
+                    streaming=True,
+                )["train"]
+                dataset = dataset.map(self.tokenize, batched=True)
+                dataset = dataset.select_columns(self.dataset_cols)
+                dataset = dataset.shuffle(buffer_size=10_000)
+                count = 0
+                for chunk in pd.read_csv(data, chunksize=1_000_000):
+                    count += len(chunk)
+                return dataset, count
+
+            self.validate_data_format(data)
             dataset = Dataset.from_pandas(data)
 
             if lazy_tokenize:
@@ -238,11 +250,11 @@ class TrainingRun:
             dataset = dataset.map(self.tokenize, batched=True)
             dataset = dataset.select_columns(self.dataset_cols)
             dataset.set_format(type="torch")
-            return dataset
+            return dataset, len(data)
 
-        train_dataset = prepare_dataset(train_data)
-        eval_dataset = (
-            None if eval_data is None else prepare_dataset(eval_data)
+        train_dataset, train_count = prepare_dataset(train_data)
+        eval_dataset, eval_count = (
+            (None, 0) if eval_data is None else prepare_dataset(eval_data)
         )
 
         if callbacks is None:
@@ -284,8 +296,8 @@ class TrainingRun:
         # Evaluate the model
         if eval_dataset is not None:
             eval_results = trainer.evaluate(eval_dataset)
-            eval_results["num_train_examples"] = len(train_data)
-            eval_results["num_eval_examples"] = len(eval_data)
+            eval_results["num_train_examples"] = train_count
+            eval_results["num_eval_examples"] = eval_count
             self.results_path.write_text(json.dumps(eval_results, indent=4))
 
         # Save the model

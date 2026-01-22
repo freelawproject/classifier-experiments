@@ -9,6 +9,9 @@ from clx.ml import training_run
 from clx.settings import CLX_HOME
 
 PROJECT_DIR = CLX_HOME / "projects" / "docketbert"
+EXP_DATA_PATH = CLX_HOME / "app_projects" / "docket-entry" / "docs.csv"
+FULL_DATA_TRAIN_PATH = PROJECT_DIR / "data" / "train.csv"
+FULL_DATA_EVAL_PATH = PROJECT_DIR / "data" / "eval.csv"
 
 
 def create_sliced_model(
@@ -35,6 +38,7 @@ def create_sliced_model(
 
 def get_experiment_config(experiment, batch_size=None):
     config = {
+        "use_full_data": False,
         "task": "mlm",
         "run_dir_parent": PROJECT_DIR / "runs",
         "base_model_name": "answerdotai/ModernBERT-base",
@@ -234,6 +238,26 @@ def get_experiment_config(experiment, batch_size=None):
             "global_attn_every_n_layers": 2,
         }
         default_batch_size = 8
+    elif experiment == "final-base-150M":
+        config["training_args"]["max_steps"] = 40761591 // 256
+        config["use_full_data"] = True
+        default_batch_size = 16
+    elif experiment == "final-large-395M":
+        config["base_model_name"] = "answerdotai/ModernBERT-large"
+        config["training_args"]["max_steps"] = 40761591 // 256
+        config["use_full_data"] = True
+        default_batch_size = 8
+    elif experiment == "final-sliced-175M":
+        base_model_name = (
+            PROJECT_DIR / "runs" / "docketbert-final-large-395M" / "model"
+        )
+        config["base_model_name"] = create_sliced_model(
+            "final-sliced-large-ft-interleaved-10l",
+            [0, 3, 6, 9, 12, 15, 18, 21, 24, 27],
+            base_model_name,
+        )
+        config["training_args"]["max_steps"] = 40761591 // 256
+        config["use_full_data"] = True
     else:
         raise ValueError(f"Invalid experiment: {experiment}")
 
@@ -308,7 +332,6 @@ def train_docketbert(
     overwrite, resume, check_params, mem_test, experiment, batch_size, exit
 ):
     """Train a docket language model."""
-    from clx.models import DocketEntry
 
     try:
         if resume and overwrite:
@@ -316,16 +339,22 @@ def train_docketbert(
                 "Cannot use --resume and --overwrite together."
             )
 
-        data = pd.read_csv(
-            DocketEntry.get_project().cached_documents_path,
-            usecols=["text"],
-            nrows=200000 if mem_test else None,
-        )
-        data = data.sample(frac=1, random_state=42)
-        train_data = data.head(-100000)
-        eval_data = data.tail(100000)
-
         config = get_experiment_config(experiment, batch_size)
+
+        use_full_data = config.pop("use_full_data")
+
+        if use_full_data:
+            train_data = FULL_DATA_TRAIN_PATH
+            eval_data = FULL_DATA_EVAL_PATH
+        else:
+            data = pd.read_csv(
+                EXP_DATA_PATH,
+                usecols=["text"],
+                nrows=200000 if mem_test else None,
+            )
+            data = data.sample(frac=1, random_state=42)
+            train_data = data.head(-100000)
+            eval_data = data.tail(100000)
 
         if mem_test:
             config["tokenize_args"]["padding"] = "max_length"
