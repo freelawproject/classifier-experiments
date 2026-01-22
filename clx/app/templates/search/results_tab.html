@@ -141,9 +141,9 @@
                     </template>
                 </div>
                 <div class="flex flex-wrap gap-2">
-                    <template x-for="tag_id in (result.tags || []).filter(tid => tid.startsWith('ft:'))" :key="tag_id">
+                    <template x-for="tag_id in (result.tags || []).filter(tid => tags?.[tid]?.slug?.startsWith('ft:'))" :key="tag_id">
                         <span
-                            class="inline-flex items-center rounded-full bg-red-100 px-2 py-1 text-xs text-gray-700"
+                            class="inline-flex items-center rounded-full bg-indigo-500 px-2 py-1 text-xs text-white font-medium"
                             x-text="labels?.[tags?.[tag_id]?.label_id]?.name"
                             x-show="labels?.[tags?.[tag_id]?.label_id]?.name"
                         ></span>
