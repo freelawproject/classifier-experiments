@@ -582,6 +582,14 @@ class Label(BaseModel):
         model = self.project.get_search_model()
         pipe = self.get_finetune_run_pipe(config_name)
 
+        minimal_heuristics = LabelHeuristic.objects.filter(
+            is_minimal=True, label=self
+        )
+        minimal_conditions = [h.get_apply_fn() for h in minimal_heuristics]
+
+        def minimal_condition_fn(text):
+            return any(condition(text) for condition in minimal_conditions)
+
         total_examples = model.objects.count()
         outer_batch_size = 1024 * 500
         for batch in tqdm(
@@ -590,6 +598,7 @@ class Label(BaseModel):
             total=total_examples // outer_batch_size,
         ):
             batch = batch[~batch["id"].isin(cached_ids)]
+            batch = batch[batch["text"].apply(minimal_condition_fn)]
             if len(batch) > 0:
                 batch["value"] = pipe(
                     batch["text"].tolist(),
@@ -659,7 +668,7 @@ class Label(BaseModel):
                 or latest_decision_at > self.trainset_updated_at
             )
         ):
-            print("Resampling trainset...")
+            print("Step 1: Resampling trainset")
             self.update_trainset()
             self.refresh_from_db()
 
@@ -671,7 +680,7 @@ class Label(BaseModel):
                 or self.trainset_updated_at > self.predictor_updated_at
             )
         ):
-            print("Fitting predictor...")
+            print("Step 2: Fitting predictor")
             self.fit_predictor()
             self.refresh_from_db()
 
@@ -684,7 +693,7 @@ class Label(BaseModel):
                 > self.trainset_predictions_updated_at
             )
         ):
-            print("Running predictions...")
+            print("Step 3: Running predictions")
             self.update_trainset_preds(num_threads=num_threads)
             self.refresh_from_db()
 
@@ -700,7 +709,7 @@ class Label(BaseModel):
                     or self.trainset_predictions_updated_at > finetuned_at
                 )
             ):
-                print(f"Training finetune: {config_name}...")
+                print(f"Step 4: Training finetune: {config_name}")
                 self.train_finetune(config_name)
 
         # Step 5: Run global corpus predictions if finetune is newer
@@ -718,7 +727,7 @@ class Label(BaseModel):
                     )
                 )
             ):
-                print(f"Running global predictions: {ft.config_name}...")
+                print("Step 5: Running global predictions")
                 self.predict_finetune(force=force)
 
         print("Update complete!")
