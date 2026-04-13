@@ -65,3 +65,30 @@ USE_TZ = True
 STATIC_URL = "/static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+    },
+    "loggers": {
+        "django.db.backends": {
+            "level": os.getenv("SQL_LOG_LEVEL", "WARNING"),
+            "handlers": ["console"],
+        },
+    },
+}
+
+# -- LLM Model Configuration --
+
+DEFAULT_MODEL = "openai/gpt-5.4"
+
+MODEL_IDS = [
+    "openai/gpt-5.4",
+    "openai/gpt-5.4-mini",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini/gemini-3-flash-preview",
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-sonnet-4-6",
+]

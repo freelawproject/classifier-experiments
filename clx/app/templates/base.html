@@ -3,16 +3,105 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Classifier Experiments</title>
+    <title>CLX</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        border: '#e2e8f0',
+                        surface: '#ffffff',
+                        muted: '#f8fafc',
+                        'muted-foreground': '#64748b',
+                        accent: {
+                            DEFAULT: '#6366f1',
+                            hover: '#4f46e5',
+                            light: '#eef2ff',
+                            muted: '#c7d2fe',
+                        },
+                        sidebar: {
+                            DEFAULT: '#0f172a',
+                            light: '#1e293b',
+                            lighter: '#334155',
+                        },
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+                    },
+                    boxShadow: {
+                        'soft': '0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.04)',
+                        'card': '0 1px 3px 0 rgb(0 0 0 / 0.06), 0 2px 8px -2px rgb(0 0 0 / 0.06)',
+                        'elevated': '0 4px 12px -2px rgb(0 0 0 / 0.08), 0 2px 6px -2px rgb(0 0 0 / 0.04)',
+                        'modal': '0 20px 60px -12px rgb(0 0 0 / 0.25), 0 8px 20px -8px rgb(0 0 0 / 0.1)',
+                    },
+                }
+            }
+        }
+    </script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 
     <style>
         [x-cloak]{ display: none !important }
+        .scrollable-panel { overflow-y: auto; }
+        /* Custom scrollbar */
+        .scrollable-panel::-webkit-scrollbar { width: 5px; }
+        .scrollable-panel::-webkit-scrollbar-track { background: transparent; }
+        .scrollable-panel::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+        .scrollable-panel::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        /* Dark scrollbar for sidebar */
+        .scrollable-dark::-webkit-scrollbar-thumb { background: #475569; }
+        .scrollable-dark::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        /* Markdown prose inside chat bubbles */
+        .prose-chat { overflow-wrap: break-word; word-break: break-word; }
+        .prose-chat p { margin: 0.35em 0; }
+        .prose-chat p:first-child { margin-top: 0; }
+        .prose-chat p:last-child { margin-bottom: 0; }
+        .prose-chat ul, .prose-chat ol { margin: 0.35em 0; padding-left: 1.4em; }
+        .prose-chat li { margin: 0.15em 0; }
+        .prose-chat pre { background: rgba(0,0,0,0.05); border-radius: 0.5rem; padding: 0.6em 0.85em; overflow-x: auto; margin: 0.5em 0; font-size: 0.85em; }
+        .prose-chat code { font-size: 0.85em; }
+        .prose-chat :not(pre) > code { background: rgba(0,0,0,0.05); padding: 0.15em 0.35em; border-radius: 0.25rem; }
+        .prose-chat h1, .prose-chat h2, .prose-chat h3 { font-weight: 600; margin: 0.5em 0 0.25em; }
+        .prose-chat h1 { font-size: 1.15em; }
+        .prose-chat h2 { font-size: 1.05em; }
+        .prose-chat h3 { font-size: 1em; }
+        .prose-chat blockquote { border-left: 3px solid rgba(0,0,0,0.12); padding-left: 0.75em; margin: 0.35em 0; color: inherit; opacity: 0.8; }
+        .prose-chat table { border-collapse: collapse; margin: 0.5em 0; }
+        .prose-chat th, .prose-chat td { border: 1px solid rgba(0,0,0,0.1); padding: 0.25em 0.5em; font-size: 0.9em; }
+        /* White variant for user bubbles */
+        .prose-chat-white pre { background: rgba(255,255,255,0.12); }
+        .prose-chat-white :not(pre) > code { background: rgba(255,255,255,0.12); }
+        .prose-chat-white blockquote { border-left-color: rgba(255,255,255,0.3); }
+        .prose-chat-white th, .prose-chat-white td { border-color: rgba(255,255,255,0.2); }
+        /* Dark variant for assistant bubbles on dark bg */
+        .prose-chat-dark pre { background: rgba(255,255,255,0.05); }
+        .prose-chat-dark :not(pre) > code { background: rgba(255,255,255,0.08); }
+        .prose-chat-dark blockquote { border-left-color: rgba(255,255,255,0.15); }
+        .prose-chat-dark th, .prose-chat-dark td { border-color: rgba(255,255,255,0.1); }
+        /* Smooth transitions */
+        .transition-panel { transition: all 0.15s ease; }
     </style>
+    <script>
+        marked.setOptions({ breaks: true, gfm: true });
+        window.renderMarkdown = (text) => text ? DOMPurify.sanitize(marked.parse(text)) : '';
+    </script>
 </head>
-<body>
+<body class="font-sans bg-slate-50 text-slate-800 antialiased h-screen flex flex-col overflow-hidden">
+    {% block navbar %}
+    <nav class="h-14 shrink-0 border-b border-slate-200/80 flex items-center px-6 bg-white shadow-soft">
+        <a href="/" class="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-2.5">
+            <span class="w-6 h-6 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-[10px] font-bold shadow-sm">C</span>
+            CLX
+        </a>
+    </nav>
+    {% endblock %}
     {% block content %}{% endblock %}
 </body>
 </html>

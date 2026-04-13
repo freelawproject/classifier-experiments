@@ -1,6 +1,0 @@
-*
-!runs
-!runs/**
-!inference_test.csv
-!inference_test.cpu.csv
-!.gitignore

@@ -1,1060 +1,721 @@
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+import random
+from datetime import UTC, datetime
+from io import StringIO
+from pathlib import Path
 
-import lmdb
-import numpy as np
 import pandas as pd
-import simplejson as json
-from django.apps import apps
+from django.conf import settings as django_settings
+from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 from django.utils import timezone
+from django_shortuuid.fields import ShortUUIDField
+from shortuuid import uuid
 from tqdm import tqdm
 
-from clx import label2slug
-from clx.llm import batch_embed, mesh_sort
-from clx.llm.anno_agent import AnnoAgent
-from clx.ml import pipeline, training_run
 from clx.settings import CLX_HOME
-from clx.utils import pd_save_or_append
+from clx.utils import generate_hash, pd_save_or_append
 
-from .custom_heuristics import custom_heuristics
-from .search_utils import BaseModel, SearchDocumentModel
+from .search import SearchManager
 
 
-class Project(BaseModel):
+class Base(models.Model):
+    """Abstract base model for all CLX models."""
+
+    id = ShortUUIDField(primary_key=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    objects = SearchManager()
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        self.updated_at = timezone.now()
+        super().save(*args, **kwargs)
+
+
+class Project(Base):
     """Model for projects."""
 
-    id = models.CharField(max_length=255, primary_key=True)
     name = models.CharField(max_length=255)
-    model_name = models.CharField(max_length=255, unique=True)
-    tags_model_name = models.CharField(max_length=255, null=True, blank=True)
-    instructions = models.TextField(null=True, blank=True)
+    instructions = models.TextField(blank=True, default="")
+    autopilot_enabled = models.BooleanField(default=False)
+    active_label = models.ForeignKey(
+        "Label",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
 
-    @property
-    def data_dir(self):
-        return CLX_HOME / "app_projects" / self.id
+    def add_docs(self, docs, **kwargs):
+        """Bulk-insert documents using django-postgres-copy.
 
-    @property
-    def cached_documents_path(self):
-        return self.data_dir / "docs.csv"
+        Args:
+            docs: Either a DataFrame with a 'text' column, a list of strings
+                  (text only), or a list of dicts with 'text' and optionally
+                  'meta' keys.
+        """
+        if docs is None:
+            return
 
-    @property
-    def cached_embeddings_path(self):
-        return self.data_dir / "embeddings.lmdb"
-
-    def load_or_add_embeddings(self, data):
-        assert all(x in data.columns for x in ["text_hash", "text"])
-        db = lmdb.open(str(self.cached_embeddings_path), map_size=1024**4)
-        with db.begin() as c:
-            data["embedding"] = data["text_hash"].apply(
-                lambda x: c.get(x.encode("utf-8"))
-            )
-            data["embedding"] = data["embedding"].apply(
-                lambda x: json.loads(x) if x is not None else None
-            )
-        needs_embeddings = data[data["embedding"].isna()]
-        data = data[data["embedding"].notna()]
-        needs_embeddings["embedding"] = batch_embed(
-            needs_embeddings["text"].tolist(),
-            num_workers=16,
-            dimensions=96,
-        )
-        with db.begin(write=True) as c:
-            for row in needs_embeddings.to_dict("records"):
-                c.put(
-                    row["text_hash"].encode("utf-8"),
-                    json.dumps(row["embedding"]).encode("utf-8"),
+        # Normalize input
+        if isinstance(docs, pd.DataFrame):
+            if docs.empty:
+                return
+            if "text" not in docs.columns:
+                raise ValueError(
+                    "DataFrame input must include a 'text' column"
                 )
-        data = pd.concat([data, needs_embeddings])
-        return data
+
+            meta_columns = [col for col in docs.columns if col != "text"]
+            docs = [
+                {
+                    "text": row["text"],
+                    "meta": {
+                        key: value
+                        for key, value in row[meta_columns].items()
+                        if pd.notna(value)
+                    },
+                }
+                for _, row in docs.iterrows()
+            ]
+        elif not docs:
+            return
+        elif isinstance(docs[0], str):
+            docs = [{"text": t, "meta": {}} for t in docs]
+        else:
+            docs = [
+                {"text": d["text"], "meta": d.get("meta", {})} for d in docs
+            ]
+
+        # Build DataFrame
+        data = pd.DataFrame(docs)
+        data = data.dropna(subset=["text"])
+        if len(data) == 0:
+            return
+        data["id"] = [uuid() for _ in range(len(data))]
+        data["text_prefix"] = data["text"].str[:50]
+        data["text_hash"] = data["text"].apply(generate_hash)
+        data["shuffle_key"] = [
+            random.randint(0, 1_000_000) for _ in range(len(data))
+        ]
+        data["meta"] = data["meta"].apply(json.dumps)
+
+        # Write to CSV buffer
+        f = StringIO()
+        data.to_csv(f, index=False)
+        f.seek(0)
+
+        # Bulk insert
+        print("Pushing documents to database...")
+        Document.objects.from_csv(
+            f,
+            static_mapping={
+                "project_id": str(self.id),
+                "created_at": timezone.now(),
+                "updated_at": timezone.now(),
+            },
+            ignore_conflicts=True,
+            **kwargs,
+        )
 
     @property
-    def cached_documents(self):
-        return pd.read_csv(self.cached_documents_path)
+    def project_dir(self):
+        """Return the project directory path."""
+        return Path(CLX_HOME) / "projects" / str(self.id)
 
-    def get_search_model(self):
-        """Get the search model class for the project."""
-        return apps.get_model("app", self.model_name)
+    def export_data(self, batch_size=100_000):
+        """Export documents to docs.csv in the project directory.
 
-    def get_tags_model(self):
-        """Get the tags model class for the project."""
-        return apps.get_model("app", self.tags_model_name)
+        Only exports documents created since the last export.
+        """
+        self.project_dir.mkdir(parents=True, exist_ok=True)
+        docs_path = self.project_dir / "docs.csv"
+        exported_path = self.project_dir / "exported.txt"
+
+        # Check last export time.
+        last_export = None
+        if exported_path.exists():
+            try:
+                last_export = datetime.fromisoformat(
+                    exported_path.read_text().strip()
+                )
+            except (ValueError, OSError):
+                pass
+
+        qs = self.documents.order_by("created_at")
+        if last_export:
+            qs = qs.filter(created_at__gt=last_export)
+
+        total = qs.count()
+        if total == 0:
+            return
+
+        try:
+            for offset in tqdm(
+                range(0, total, batch_size),
+                desc="Exporting docs",
+                total=(total + batch_size - 1) // batch_size,
+            ):
+                batch = qs.values_list("id", "text")[
+                    offset : offset + batch_size
+                ]
+                data = pd.DataFrame(
+                    list(batch), columns=["document_id", "text"]
+                )
+                pd_save_or_append(data, docs_path)
+        except BaseException:
+            docs_path.unlink(missing_ok=True)
+            exported_path.unlink(missing_ok=True)
+            raise
+
+        now = datetime.now(UTC).isoformat()
+        exported_path.write_text(now)
+
+    def update_tasks(self):
+        """Sync tasks based on current project/label state.
+
+        Rules:
+        - No project instructions → project_understanding task (no label)
+        - Has project instructions but label lacks instructions → label_understanding per label
+        - Both have instructions but label has no training examples → sampling_strategy per label
+        - Label has unannotated training examples → annotate per label
+        """
+        from django.db.models import Count, Q
+
+        expected = []  # list of (prompt_id, label_id | None)
+
+        if not self.instructions.strip():
+            expected.append(("project_understanding", None))
+        else:
+            labels = list(self.labels.all())
+            for label in labels:
+                if not label.instructions.strip():
+                    expected.append(("label_understanding", label.id))
+                else:
+                    ld_stats = LabelDocument.objects.filter(
+                        label=label
+                    ).aggregate(
+                        total=Count("id"),
+                        annotated=Count(
+                            "id",
+                            filter=Q(annotations__source="agent"),
+                        ),
+                    )
+                    if ld_stats["total"] == 0:
+                        expected.append(("sampling_strategy", label.id))
+                    elif ld_stats["annotated"] < ld_stats["total"]:
+                        expected.append(("annotate", label.id))
+
+        expected_set = set(expected)
+        existing = {(t.prompt_id, t.label_id): t for t in self.tasks.all()}
+
+        # Delete tasks no longer expected (keep in-progress and awaiting-input)
+        keep_statuses = (Task.Status.IN_PROGRESS, Task.Status.AWAITING_INPUT)
+        to_delete = [
+            t.id
+            for key, t in existing.items()
+            if key not in expected_set and t.status not in keep_statuses
+        ]
+        if to_delete:
+            Task.objects.filter(id__in=to_delete).delete()
+
+        # Create missing tasks
+        to_create = [
+            Task(project=self, prompt_id=pid, label_id=lid)
+            for pid, lid in expected
+            if (pid, lid) not in existing
+        ]
+        if to_create:
+            Task.objects.bulk_create(to_create, ignore_conflicts=True)
+
+        return list(self.tasks.select_related("label").order_by("created_at"))
 
 
-class Label(BaseModel):
-    """Model for labels."""
+class Document(Base):
+    """Model for documents within a project."""
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="documents"
+    )
+    text = models.TextField()
+    text_prefix = models.CharField(max_length=50)
+    meta = models.JSONField(default=dict, null=True, blank=True)
+    shuffle_key = models.IntegerField()
+    text_hash = models.CharField(max_length=64)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "text_hash"],
+                name="document_project_text_hash_uniq",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["shuffle_key", "id"],
+                name="shuffle_key_idx",
+            ),
+            models.Index(
+                fields=["text_prefix"],
+                name="text_prefix_idx",
+                opclasses=["text_pattern_ops"],
+            ),
+            GinIndex(
+                fields=["text"],
+                name="text_trgm_idx",
+                opclasses=["gin_trgm_ops"],
+            ),
+        ]
+
+
+class Label(Base):
+    """Model for labels within a project."""
 
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="labels"
     )
     name = models.CharField(max_length=255)
-    instructions = models.TextField(null=True, blank=True)
-
-    # Sample counts
-    num_excluded = models.IntegerField(default=0)
-    num_neutral = models.IntegerField(default=0)
-    num_likely = models.IntegerField(default=0)
-
-    # Trainset config
-    trainset_num_excluded = models.IntegerField(default=50)
-    trainset_num_neutral = models.IntegerField(default=50)
-    trainset_num_likely = models.IntegerField(default=50)
-    trainset_num_decision_neighbors = models.IntegerField(default=20)
-    trainset_updated_at = models.DateTimeField(null=True, blank=True)
-    trainset_predictions_updated_at = models.DateTimeField(
-        null=True, blank=True
+    instructions = models.TextField(blank=True, default="")
+    autopilot_thread = models.ForeignKey(
+        "Thread",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
     )
-    trainset_num_positive_preds = models.IntegerField(default=0)
-    trainset_num_negative_preds = models.IntegerField(default=0)
-
-    @property
-    def data_dir(self):
-        return self.project.data_dir / "labels" / f"{label2slug(self.name)}"
-
-    def excluded_query(self, queryset=None):
-        if queryset is None:
-            queryset = self.project.get_search_model().objects
-        tags = LabelTag.objects.filter(label=self, heuristic__is_minimal=True)
-        tag_ids = tags.values_list("id", flat=True)
-        if not tag_ids:
-            return queryset.none()
-        return queryset.tags(not_any=tag_ids)
-
-    def neutral_query(self, queryset=None):
-        if queryset is None:
-            queryset = self.project.get_search_model().objects
-        minimal_tags = LabelTag.objects.filter(
-            label=self, heuristic__is_minimal=True
-        )
-        minimal_tag_ids = minimal_tags.values_list("id", flat=True)
-        likely_tags = LabelTag.objects.filter(
-            label=self, heuristic__is_likely=True
-        )
-        likely_tag_ids = likely_tags.values_list("id", flat=True)
-        return queryset.tags(any=minimal_tag_ids, not_any=likely_tag_ids)
-
-    def likely_query(self, queryset=None):
-        if queryset is None:
-            queryset = self.project.get_search_model().objects
-        minimal_tags = LabelTag.objects.filter(
-            label=self, heuristic__is_minimal=True
-        )
-        minimal_tag_ids = minimal_tags.values_list("id", flat=True)
-        likely_tags = LabelTag.objects.filter(
-            label=self, heuristic__is_likely=True
-        )
-        likely_tag_ids = likely_tags.values_list("id", flat=True)
-        if not likely_tag_ids:
-            return queryset.none()
-        return queryset.tags(any=minimal_tag_ids).tags(any=likely_tag_ids)
-
-    def get_minimal_fn(self):
-        minimal_fns = [
-            x.heuristic.get_apply_fn()
-            for x in LabelTag.objects.filter(
-                label=self, heuristic__is_minimal=True
-            )
-        ]
-
-        def minimal_fn(text):
-            return any(f(text) for f in minimal_fns)
-
-        return minimal_fn
-
-    def get_likely_fn(self):
-        likely_fns = [
-            x.heuristic.get_apply_fn()
-            for x in LabelTag.objects.filter(
-                label=self, heuristic__is_likely=True
-            )
-        ]
-
-        def likely_fn(text):
-            return any(f(text) for f in likely_fns)
-
-        return likely_fn
-
-    def update_counts(self):
-        self.num_excluded = self.excluded_query().count()
-        self.num_likely = self.likely_query().count()
-        self.num_neutral = self.neutral_query().count()
-        self.save()
-
-    def update_trainset(self):
-        data = self.load_trainset()
-        model = self.project.get_search_model()
-
-        # Reset predictions for existing anno disagreements
-        needs_corrections = data[
-            data["anno_value"].notna()
-            & data["pred"].notna()
-            & (data["anno_value"] != data["pred"])
-        ]["text_hash"].tolist()
-        if len(needs_corrections):
-            LabelTrainsetExample.objects.filter(
-                label=self, text_hash__in=needs_corrections
-            ).update(pred=None, reason=None)
-
-        new_ids = []
-
-        # Sample decision neighbors
-        model = self.project.get_search_model()
-        for decision in self.decisions.all():
-            if not decision.added_to_sample:
-                embedding = (
-                    model.objects.filter(text_hash=decision.text_hash)
-                    .first()
-                    .embedding.to_list()
-                )
-                decision_examples = model.objects.search(
-                    semantic_sort=embedding,
-                    page_size=self.trainset_num_decision_neighbors,
-                )
-                new_ids += [x["id"] for x in decision_examples["data"]]
-                decision.save(added_to_sample=True)
-
-        # Sample on querystring samplers
-        for querystring in self.querystrings.all():
-            if not querystring.added_to_sample:
-                querystring_examples = model.objects.search(
-                    params={"querystring": querystring.querystring},
-                    page_size=querystring.num_examples,
-                    sort=["shuffle_sort", "id"],
-                )
-                new_ids += [x["id"] for x in querystring_examples["data"]]
-                querystring.save(added_to_sample=True)
-
-        # Mesh sort helper
-        def apply_mesh_sort(queryset, n_examples):
-            """Select 10x the number of examples and take most diverse 10%"""
-            cluster_ks = [10, 10]
-            data = queryset.order_by("?").values("id", "embedding")
-            data = pd.DataFrame(data[: n_examples * 10])
-            data["embedding"] = data["embedding"].apply(lambda x: x.to_list())
-            data["sort"] = mesh_sort(
-                np.array(data["embedding"].tolist()), cluster_ks
-            )
-            data = data.sort_values(by="sort").head(n_examples)
-            return data["id"].tolist()
-
-        # Sample from heuristic buckets
-        num_excluded = self.trainset_num_excluded - len(
-            data[data["bucket"] == "excluded"]
-        )
-        num_neutral = self.trainset_num_neutral - len(
-            data[data["bucket"] == "neutral"]
-        )
-        num_likely = self.trainset_num_likely - len(
-            data[data["bucket"] == "likely"]
-        )
-
-        if num_excluded > 0:
-            new_ids += apply_mesh_sort(self.excluded_query(), num_excluded)
-        if num_neutral > 0:
-            new_ids += apply_mesh_sort(self.neutral_query(), num_neutral)
-        if num_likely > 0:
-            new_ids += apply_mesh_sort(self.likely_query(), num_likely)
-
-        # Get new examples
-        cols = ["text", "text_hash"]
-        new_examples = pd.DataFrame(
-            model.objects.filter(id__in=new_ids).values(*cols),
-            columns=cols,
-        )
-        new_examples = new_examples[
-            ~new_examples["text_hash"].isin(data["text_hash"])
-        ]
-        new_examples = new_examples.drop_duplicates(subset="text_hash")
-        new_examples = new_examples.sample(frac=1)
-
-        # Make train/eval split
-        split = int(len(new_examples) * 0.8)
-        train_examples = new_examples.head(split)
-        train_examples["split"] = "train"
-        eval_examples = new_examples.tail(len(new_examples) - split)
-        eval_examples["split"] = "eval"
-        new_examples = pd.concat([train_examples, eval_examples])
-
-        new_examples = pd.concat([train_examples, eval_examples])
-
-        # Add to trainset
-        rows = new_examples.to_dict("records")
-        LabelTrainsetExample.objects.bulk_create(
-            [LabelTrainsetExample(label_id=self.id, **row) for row in rows],
-            batch_size=1000,
-        )
-        self.sync_trainset_tags()
-        self.update_trainset_pred_counts()
-        self.trainset_updated_at = timezone.now()
-        self.save()
-
-    def reset_trainset(self):
-        self.trainset_examples.all().delete()
-        self.decisions.all().update(added_to_sample=False)
-        self.querystrings.all().update(added_to_sample=False)
-        self.sync_trainset_tags()
-        self.update_trainset_pred_counts()
-        self.trainset_updated_at = None
-        self.trainset_predictions_updated_at = None
-        self.save()
-
-    def load_annos(self):
-        project = self.project
-        search_model = project.get_search_model()
-
-        pos_annos = search_model.objects.tags(
-            any=[self.anno_true_tag.id]
-        ).values("text_hash", "text")
-        pos_annos = pd.DataFrame(pos_annos)
-        pos_annos["value"] = True
-
-        neg_annos = search_model.objects.tags(
-            any=[self.anno_false_tag.id]
-        ).values("text_hash", "text")
-        neg_annos = pd.DataFrame(neg_annos)
-        neg_annos["value"] = False
-
-        flag_annos = search_model.objects.tags(
-            any=[self.anno_flag_tag.id]
-        ).values("text_hash", "text")
-        flag_annos = pd.DataFrame(flag_annos)
-        flag_annos["value"] = None
-
-        annos = pd.concat([pos_annos, neg_annos, flag_annos])
-        if annos.empty:
-            return pd.DataFrame(columns=["text_hash", "text", "value"])
-        return annos
-
-    def load_trainset(self):
-        trainset_hashes = list(
-            self.trainset_examples.values_list("text_hash", flat=True)
-        )
-        annos = self.load_annos()
-
-        missing_annos = annos[~annos["text_hash"].isin(trainset_hashes)]
-        missing_annos = missing_annos.drop_duplicates(subset="text_hash")
-        if len(missing_annos):
-            updates = [
-                LabelTrainsetExample(
-                    label_id=self.id,
-                    text_hash=row["text_hash"],
-                    text=row["text"],
-                    split="train",
-                )
-                for row in missing_annos.to_dict("records")
-            ]
-            LabelTrainsetExample.objects.bulk_create(updates, batch_size=1000)
-
-        cols = ["text_hash", "text", "split", "pred", "reason"]
-        data = pd.DataFrame(
-            self.trainset_examples.all().values(*cols),
-            columns=cols,
-        )
-
-        flagged_hashes = annos[annos["value"].isna()]["text_hash"].tolist()
-        annos = annos[~annos["value"].isna()]
-        annos = annos[["text_hash", "value"]].rename(
-            columns={"value": "anno_value"}
-        )
-        data = data.merge(annos, on="text_hash", how="left")
-
-        data["value"] = data["anno_value"].fillna(data["pred"])
-        data.loc[data["text_hash"].isin(flagged_hashes), "value"] = None
-
-        data = data.sample(frac=1, random_state=42)
-        data = data.reset_index(drop=True)
-
-        minimal_fn = self.get_minimal_fn()
-        likely_fn = self.get_likely_fn()
-        data["bucket"] = data["text"].apply(
-            lambda x: "excluded"
-            if not minimal_fn(x)
-            else "likely"
-            if likely_fn(x)
-            else "neutral"
-        )
-        return data
-
-    def update_trainset_preds(self, num_threads=32):
-        data = self.load_trainset()
-        data = data[data["pred"].isna()]
-        texts = data["text"].tolist()
-        preds = self.batch_predict(texts, num_threads=num_threads)
-        data["pred"] = [x.get("value") for x in preds]
-        data["reason"] = [x.get("reason") for x in preds]
-        examples = self.trainset_examples.all()
-        examples = {e.text_hash: e for e in examples}
-        updates = []
-        for row in data.to_dict("records"):
-            if row["text_hash"] in examples:
-                example = examples[row["text_hash"]]
-                example.pred = row["pred"]
-                example.reason = row["reason"]
-                updates.append(example)
-        LabelTrainsetExample.objects.bulk_update(
-            updates,
-            fields=["pred", "reason"],
-            batch_size=1000,
-        )
-        self.update_trainset_pred_counts()
-        self.sync_trainset_pred_tags()
-        self.trainset_predictions_updated_at = timezone.now()
-        self.save()
-
-    def update_trainset_pred_counts(self):
-        data = self.load_trainset()
-        if len(data) and "pred" in data.columns:
-            data = data.dropna(subset=["pred"])
-            preds = data["pred"].astype(bool)
-            self.trainset_num_positive_preds = preds.sum()
-            self.trainset_num_negative_preds = (~preds).sum()
-        else:
-            self.trainset_num_positive_preds = 0
-            self.trainset_num_negative_preds = 0
-        self.save()
-
-    def load_predictor(self):
-        args = {
-            "label_name": self.name,
-            "project_instructions": self.project.instructions,
-            "label_instructions": self.instructions,
-            "decisions": self.decisions.values("text", "value", "reason"),
-        }
-
-        def predict_fn(text: str):
-            for _ in range(3):
-                try:
-                    agent = AnnoAgent(**args)
-                    anno = agent(text)
-                    return {
-                        "status": "success",
-                        "value": anno.value,
-                        "reason": anno.reason,
-                    }
-                except Exception as e:
-                    print(f"Error predicting {text}: {e}")
-                    time.sleep(5)
-            return {"status": "error"}
-
-        return predict_fn
-
-    def batch_predict(self, texts: list[str], num_threads: int = 32):
-        predictor = self.load_predictor()
-        with ThreadPoolExecutor(max_workers=num_threads) as executor:
-            futures = [executor.submit(predictor, text) for text in texts]
-            for _ in tqdm(
-                as_completed(futures), total=len(futures), desc="Predicting"
-            ):
-                pass
-            return [future.result() for future in futures]
-
-    @property
-    def trainset_train_tag(self):
-        tag, _ = LabelTag.objects.get_or_create(
-            name="trainset:train",
-            label=self,
-        )
-        return tag
-
-    @property
-    def trainset_eval_tag(self):
-        tag, _ = LabelTag.objects.get_or_create(
-            name="trainset:eval",
-            label=self,
-        )
-        return tag
-
-    @property
-    def trainset_pred_tag(self):
-        tag, _ = LabelTag.objects.get_or_create(
-            name="trainset:pred",
-            label=self,
-        )
-        return tag
-
-    def get_trainset_finetune_tag(self, config_name):
-        tag, _ = LabelTag.objects.get_or_create(
-            name=f"trainset:ft:{config_name}",
-            label=self,
-        )
-        return tag
-
-    @property
-    def finetune_tag(self):
-        tag, _ = LabelTag.objects.get_or_create(
-            name="ft",
-            label=self,
-        )
-        return tag
-
-    @property
-    def anno_true_tag(self):
-        tag, _ = LabelTag.objects.get_or_create(
-            name="anno:true",
-            label=self,
-        )
-        return tag
-
-    @property
-    def anno_false_tag(self):
-        tag, _ = LabelTag.objects.get_or_create(
-            name="anno:false",
-            label=self,
-        )
-        return tag
-
-    @property
-    def anno_flag_tag(self):
-        tag, _ = LabelTag.objects.get_or_create(
-            name="anno:flag",
-            label=self,
-        )
-        return tag
-
-    def sync_trainset_tags(self):
-        """Sync tags for train/eval splits to match current trainset examples."""
-        model = self.project.get_search_model()
-
-        train_hashes = list(
-            self.trainset_examples.filter(split="train").values_list(
-                "text_hash", flat=True
-            )
-        )
-        if train_hashes:
-            train_ids = list(
-                model.objects.filter(text_hash__in=train_hashes).values_list(
-                    "id", flat=True
-                )
-            )
-        else:
-            train_ids = []
-        model.bulk_replace_tag(self.trainset_train_tag, train_ids)
-
-        eval_hashes = list(
-            self.trainset_examples.filter(split="eval").values_list(
-                "text_hash", flat=True
-            )
-        )
-        if eval_hashes:
-            eval_ids = list(
-                model.objects.filter(text_hash__in=eval_hashes).values_list(
-                    "id", flat=True
-                )
-            )
-        else:
-            eval_ids = []
-        model.bulk_replace_tag(self.trainset_eval_tag, eval_ids)
-
-    def sync_trainset_pred_tags(self):
-        """Sync tag for positive predictions to match current predicted positives."""
-        model = self.project.get_search_model()
-        pos_hashes = list(
-            self.trainset_examples.filter(pred=True).values_list(
-                "text_hash", flat=True
-            )
-        )
-        if pos_hashes:
-            pos_ids = list(
-                model.objects.filter(text_hash__in=pos_hashes).values_list(
-                    "id", flat=True
-                )
-            )
-        else:
-            pos_ids = []
-        model.bulk_replace_tag(self.trainset_pred_tag, pos_ids)
-
-    def get_finetune_run_name(self, config_name):
-        return f"{self.project_id}__{label2slug(self.name)}__{config_name}"
-
-    def get_finetune_run_pipe(self, config_name):
-        run_name = self.get_finetune_run_name(config_name)
-        model_path = f"/runpod-volume/clx/runs/{run_name}/model"
-        return pipeline(task="classification", model=model_path, remote=True)
-
-    def prepare_finetune(
-        self, config_name, batch_size=16, gradient_accumulation_steps=1
-    ):
-        model = self.project.get_search_model()
-        config = model.finetune_configs[config_name]
-        data = self.load_trainset()
-        data = data.sample(frac=1, random_state=42)
-        data = (
-            data[["text_hash", "text", "value", "split"]]
-            .rename(columns={"value": "label"})
-            .dropna()
-        )
-        data["label"] = data["label"].apply(lambda x: "yes" if x else "no")
-        train_data = data[data["split"] == "train"]
-        eval_data = data[data["split"] == "eval"]
-
-        num_train_epochs = config["training_args"].get("num_train_epochs", 1)
-        config["training_args"]["num_train_epochs"] = num_train_epochs
-        total_steps = (num_train_epochs * len(train_data)) // (
-            batch_size * gradient_accumulation_steps
-        )
-        save_steps = total_steps // 9
-        config["training_args"]["eval_strategy"] = "steps"
-        config["training_args"]["save_strategy"] = "steps"
-        config["training_args"]["eval_steps"] = save_steps
-        config["training_args"]["save_steps"] = save_steps
-        config["training_args"]["per_device_train_batch_size"] = batch_size
-        config["training_args"]["per_device_eval_batch_size"] = batch_size
-        config["training_args"]["gradient_accumulation_steps"] = (
-            gradient_accumulation_steps
-        )
-
-        run_config = {
-            "task": "classification",
-            "run_name": self.get_finetune_run_name(config_name),
-            "label_names": ["yes", "no"],
-            **config,
-        }
-
-        return train_data, eval_data, run_config
-
-    def train_finetune(self, config_name):
-        """Train a finetune model for this label."""
-        train_data, eval_data, run_config = self.prepare_finetune(config_name)
-
-        run = training_run(**run_config)
-        outputs = run.train(train_data, eval_data, overwrite=True, remote=True)
-
-        data = pd.concat([train_data, eval_data])
-
-        pipe = self.get_finetune_run_pipe(config_name)
-        data["pred"] = pipe(data["text"].tolist(), batch_size=16)
-        data = data[data["pred"] == "yes"]
-
-        tag = self.get_trainset_finetune_tag(config_name)
-        model = self.project.get_search_model()
-        example_ids = model.objects.filter(
-            text_hash__in=data["text_hash"].tolist()
-        )
-        example_ids = example_ids.values_list("id", flat=True)
-        model.bulk_replace_tag(tag.id, example_ids)
-
-        finetune, _ = LabelFinetune.objects.get_or_create(
-            label=self, config_name=config_name
-        )
-        finetune.eval_results = outputs["results"]
-        finetune.finetuned_at = timezone.now()
-        finetune.save()
-
-        return finetune
-
-    def predict_finetune(self, batch_size=16, num_workers=64, force=False):
-        """Run finetune predictions across the entire corpus."""
-        cache_path = self.data_dir / "finetune_predictions_cache.csv"
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        config_name = self.project.get_search_model().main_finetune_config
-        if config_name is None:
-            raise ValueError("Set main_finetune_config for this project")
-
-        if force and cache_path.exists():
-            cache_path.unlink()
-
-        cached_ids = set()
-        if cache_path.exists():
-            cached_data = pd.read_csv(cache_path)
-            cached_ids = set(cached_data["id"].unique().tolist())
-
-        model = self.project.get_search_model()
-        pipe = self.get_finetune_run_pipe(config_name)
-
-        minimal_heuristics = LabelHeuristic.objects.filter(
-            is_minimal=True, label=self
-        )
-        minimal_conditions = [h.get_apply_fn() for h in minimal_heuristics]
-
-        def minimal_condition_fn(text):
-            return any(condition(text) for condition in minimal_conditions)
-
-        total_examples = model.objects.count()
-        outer_batch_size = 1024 * 500
-        for batch in tqdm(
-            model.objects.batch_df("id", "text", batch_size=outer_batch_size),
-            desc=f"Predicting {config_name}",
-            total=total_examples // outer_batch_size,
-        ):
-            batch = batch[~batch["id"].isin(cached_ids)]
-            batch = batch[batch["text"].apply(minimal_condition_fn)]
-            if len(batch) > 0:
-                batch["value"] = pipe(
-                    batch["text"].tolist(),
-                    batch_size=batch_size,
-                    num_workers=num_workers,
-                    max_length=768,
-                    truncation=True,
-                )
-                batch["value"] = batch["value"].apply(lambda x: x == "yes")
-                pd_save_or_append(batch[["id", "value"]], cache_path)
-
-        if cache_path.exists():
-            all_preds = pd.read_csv(cache_path)
-            positive_ids = all_preds[all_preds["value"]]["id"].tolist()
-            tag = self.finetune_tag
-            model.bulk_replace_tag(tag.id, positive_ids)
-            finetune = self.fintunes.filter(config_name=config_name).first()
-            if finetune:
-                finetune.predicted_at = timezone.now()
-                finetune.save()
-            cache_path.unlink()
-
-            print(
-                f"Predictions complete: {len(positive_ids):,} positive out of {len(all_preds):,} total"
-            )
-
-    def update_all(self, num_threads=128, predict=False, force=False):
-        """Update all components that are out of date based on timestamps.
-
-        Runs the full pipeline in order, but only steps that need updating:
-        1. Resample trainset (if decisions newer than trainset)
-        2. Run predictions (if trainset newer than predictions)
-        3. Train finetunes (if predictions newer than finetunes)
-        4. Run global corpus predictions (if predict is True and finetune newer than global predictions)
-        """
-        missing = []
-        if not self.heuristics.filter(is_minimal=True).exists():
-            missing.append("at least one minimal heuristic")
-        if not self.heuristics.filter(is_likely=True).exists():
-            missing.append("at least one likely heuristic")
-        if not self.decisions.filter(value=True).exists():
-            missing.append("at least one positive decision")
-        if not self.decisions.filter(value=False).exists():
-            missing.append("at least one negative decision")
-
-        if missing:
-            print("Cannot run update_all - missing required setup:")
-            for item in missing:
-                print(f"  - {item}")
-            return
-
-        model = self.project.get_search_model()
-        finetune_configs = list(model.finetune_configs.keys())
-
-        # Get latest decision timestamp
-        latest_decision = self.decisions.order_by("-updated_at").first()
-        latest_decision_at = (
-            latest_decision.updated_at if latest_decision else None
-        )
-
-        # Step 1: Resample trainset if decisions are newer
-        if force or (
-            latest_decision_at
-            and (
-                not self.trainset_updated_at
-                or latest_decision_at > self.trainset_updated_at
-            )
-        ):
-            print("Step 1: Resampling trainset")
-            self.update_trainset()
-            self.refresh_from_db()
-
-        # Step 2: Run predictions if trainset is newer
-        if force or (
-            self.trainset_updated_at
-            and (
-                not self.trainset_predictions_updated_at
-                or self.trainset_updated_at
-                > self.trainset_predictions_updated_at
-            )
-        ):
-            print("Step 2: Running predictions")
-            self.update_trainset_preds(num_threads=num_threads)
-            self.refresh_from_db()
-
-        # Step 3: Train finetunes if predictions are newer
-        for config_name in finetune_configs:
-            finetune = self.fintunes.filter(config_name=config_name).first()
-            finetuned_at = finetune.finetuned_at if finetune else None
-
-            if force or (
-                self.trainset_predictions_updated_at
-                and (
-                    not finetuned_at
-                    or self.trainset_predictions_updated_at > finetuned_at
-                )
-            ):
-                print(f"Step 3: Training finetune: {config_name}")
-                self.train_finetune(config_name)
-
-        # Step 4: Run global corpus predictions if finetune is newer
-        if predict:
-            ft = self.fintunes.filter(
-                config_name=self.project.get_search_model().main_finetune_config
-            ).first()
-            if ft and (
-                force
-                or (
-                    ft.finetuned_at
-                    and (
-                        not ft.predicted_at
-                        or ft.finetuned_at > ft.predicted_at
-                    )
-                )
-            ):
-                print("Step 4: Running global predictions")
-                self.predict_finetune(force=force)
-
-        print("Update complete!")
+    finetune_id = models.CharField(max_length=255, blank=True, default="")
+    finetune_training_args = models.JSONField(default=dict, blank=True)
+    finetuned_at = models.DateTimeField(null=True, blank=True)
+    finetune_status = models.CharField(max_length=20, blank=True, default="")
+    predicted_at = models.DateTimeField(null=True, blank=True)
+    prediction_stats = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        unique_together = ("project", "name")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "name"],
+                name="label_project_name_uniq",
+            )
+        ]
+
+    def finetune(self, training_args=None):
+        """Kick off a remote finetuning job for this label."""
+        import os
+        import random
+
+        import pandas as pd
+        import requests
+
+        from clx.utils import S3
+
+        training_args = training_args or {}
+        self.finetune_training_args = training_args
+        self.finetune_status = "pending"
+        self.save(
+            update_fields=[
+                "finetune_training_args",
+                "finetune_status",
+                "updated_at",
+            ]
+        )
+
+        # Assemble data from annotated label documents (yes/no only).
+        # Single query: join through to document text and annotation value.
+        rows = list(
+            LabelDocument.objects.filter(
+                label=self,
+                annotations__source="agent",
+                annotations__value__in=["yes", "no"],
+            ).values_list(
+                "document__text",
+                "annotations__value",
+            )
+        )
+        rows = [{"text": text, "label": value} for text, value in rows]
+
+        random.shuffle(rows)
+        df = pd.DataFrame(rows)
+        split = max(1, int(len(df) * 0.2))
+        eval_data = df.iloc[:split]
+        train_data = df.iloc[split:]
+
+        # Build training args with sensible defaults.
+        import math
+
+        from clx.ml import training_run
+
+        batch_size = training_args.get("per_device_train_batch_size", 8)
+        grad_accum = training_args.get("gradient_accumulation_steps", 1)
+        effective_batch = batch_size * grad_accum
+        steps_per_epoch = max(1, math.ceil(len(train_data) / effective_batch))
+        checkpoint_steps = max(1, steps_per_epoch // 5)
+
+        defaults = {
+            "per_device_train_batch_size": batch_size,
+            "per_device_eval_batch_size": batch_size,
+            "gradient_accumulation_steps": grad_accum,
+            "num_train_epochs": 3,
+            "eval_strategy": "steps",
+            "eval_steps": checkpoint_steps,
+            "save_steps": checkpoint_steps,
+        }
+        merged_args = {**defaults, **training_args}
+
+        run = training_run(
+            task="classification",
+            run_name=str(self.id),
+            label_names=["yes", "no"],
+            training_args=merged_args,
+        )
+
+        # Upload data to S3 and submit to RunPod.
+        import tempfile
+        import uuid as _uuid
+        from pathlib import Path
+
+        endpoint_id = os.getenv("RUNPOD_FINETUNE_ENDPOINT_ID")
+        api_key = os.getenv("RUNPOD_API_KEY")
+        if not endpoint_id or not api_key:
+            self.finetune_status = "error"
+            self.save(update_fields=["finetune_status", "updated_at"])
+            raise ValueError(
+                "RUNPOD_FINETUNE_ENDPOINT_ID and RUNPOD_API_KEY must be set"
+            )
+
+        s3 = S3()
+        job_key = str(_uuid.uuid4())
+        s3_prefix = f"runpod/finetune/{job_key}"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = Path(tmpdir) / "train.csv"
+            train_data.to_csv(train_path, index=False)
+            s3.upload(train_path, f"{s3_prefix}/train.csv")
+            eval_path = Path(tmpdir) / "eval.csv"
+            eval_data.to_csv(eval_path, index=False)
+            s3.upload(eval_path, f"{s3_prefix}/eval.csv")
+
+        config = run.config
+        del config["run_dir_parent"]
+        payload = {
+            "input": {
+                "training_run": config,
+                "s3_bucket": s3.bucket,
+                "s3_prefix": s3_prefix,
+                "overwrite": True,
+            }
+        }
+
+        response = requests.post(
+            f"https://api.runpod.ai/v2/{endpoint_id}/run",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+        )
+        response.raise_for_status()
+        job_id = response.json()["id"]
+
+        self.finetune_id = job_id
+        self.finetune_status = "in_progress"
+        self.save(
+            update_fields=[
+                "finetune_id",
+                "finetune_status",
+                "updated_at",
+            ]
+        )
+        return job_id
+
+    @property
+    def pipe(self):
+        """Remote classification pipeline for the finetuned model."""
+        from clx.ml import pipeline
+
+        model_path = f"/runpod-volume/clx/runs/{self.id}/model"
+        return pipeline(
+            task="classification",
+            model=model_path,
+            remote=True,
+        )
+
+    def predict(self):
+        """Run predictions across all label documents using the finetuned model."""
+        from django.utils import timezone
+
+        if self.finetune_status != "completed":
+            raise ValueError("No completed finetune available.")
+
+        ld_qs = LabelDocument.objects.filter(label=self).select_related(
+            "document"
+        )
+        ld_list = list(ld_qs.values_list("id", "document__text"))
+        if not ld_list:
+            return
+
+        ld_ids = [row[0] for row in ld_list]
+        texts = [row[1] for row in ld_list]
+
+        results = self.pipe.predict(texts, batch_size=16, return_scores=True)
+
+        # Build predictions map.
+        predictions = {}
+        for ld_id, scores in zip(ld_ids, results):
+            yes_score = scores.get("yes", 0)
+            no_score = scores.get("no", 0)
+            pred = "yes" if yes_score >= no_score else "no"
+            top_score = max(yes_score, no_score)
+            confidence = abs(top_score - 0.5) * 2
+            predictions[ld_id] = (pred, confidence)
+
+        # Bulk update predictions.
+        ld_objs = []
+        for ld_id, (pred, confidence) in predictions.items():
+            obj = LabelDocument(id=ld_id)
+            obj.prediction = pred
+            obj.prediction_confidence = confidence
+            ld_objs.append(obj)
+
+        LabelDocument.objects.bulk_update(
+            ld_objs,
+            ["prediction", "prediction_confidence"],
+            batch_size=1000,
+        )
+
+        # Compute F1 and accuracy on annotated examples (yes/no only).
+        annotated = dict(
+            ClassificationAnnotation.objects.filter(
+                label_document_id__in=ld_ids,
+                source="agent",
+                value__in=["yes", "no"],
+            ).values_list("label_document_id", "value")
+        )
+
+        if annotated:
+            tp = fp = fn = correct = 0
+            total = len(annotated)
+            for ld_id, true_val in annotated.items():
+                pred_val = predictions[ld_id][0]
+                if pred_val == true_val:
+                    correct += 1
+                if pred_val == "yes" and true_val == "yes":
+                    tp += 1
+                elif pred_val == "yes" and true_val == "no":
+                    fp += 1
+                elif pred_val == "no" and true_val == "yes":
+                    fn += 1
+
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            f1 = (
+                2 * precision * recall / (precision + recall)
+                if (precision + recall) > 0
+                else 0
+            )
+            self.prediction_stats = {
+                "f1": round(f1, 4),
+                "accuracy": round(correct / total, 4),
+                "precision": round(precision, 4),
+                "recall": round(recall, 4),
+                "total": total,
+            }
+        else:
+            self.prediction_stats = {}
+
+        self.predicted_at = timezone.now()
+        self.save(
+            update_fields=[
+                "predicted_at",
+                "prediction_stats",
+                "updated_at",
+            ]
+        )
+
+    def recalculate_prediction_stats(self):
+        """Recompute F1/accuracy from existing predictions vs annotations."""
+        ld_data = list(
+            LabelDocument.objects.filter(
+                label=self,
+            )
+            .exclude(prediction="")
+            .filter(prediction__isnull=False)
+            .values_list("id", "prediction")
+        )
+        if not ld_data:
+            self.prediction_stats = {}
+            self.save(update_fields=["prediction_stats", "updated_at"])
+            return
+
+        predictions = dict(ld_data)
+        ld_ids = list(predictions.keys())
+
+        annotated = dict(
+            ClassificationAnnotation.objects.filter(
+                label_document_id__in=ld_ids,
+                source="agent",
+                value__in=["yes", "no"],
+            ).values_list("label_document_id", "value")
+        )
+
+        if annotated:
+            tp = fp = fn = correct = 0
+            total = len(annotated)
+            for ld_id, true_val in annotated.items():
+                pred_val = predictions.get(ld_id)
+                if not pred_val:
+                    continue
+                if pred_val == true_val:
+                    correct += 1
+                if pred_val == "yes" and true_val == "yes":
+                    tp += 1
+                elif pred_val == "yes" and true_val == "no":
+                    fp += 1
+                elif pred_val == "no" and true_val == "yes":
+                    fn += 1
+
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            f1 = (
+                2 * precision * recall / (precision + recall)
+                if (precision + recall) > 0
+                else 0
+            )
+            self.prediction_stats = {
+                "f1": round(f1, 4),
+                "accuracy": round(correct / total, 4),
+                "precision": round(precision, 4),
+                "recall": round(recall, 4),
+                "total": total,
+            }
+        else:
+            self.prediction_stats = {}
+
+        self.save(update_fields=["prediction_stats", "updated_at"])
 
 
-class LabelTag(BaseModel):
-    """Model for label tags."""
+class Prompt(Base):
+    """A customizable prompt template for a project."""
 
-    name = models.CharField(max_length=255)
-    label = models.ForeignKey(
-        Label, on_delete=models.CASCADE, related_name="tags"
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="prompts"
     )
-    slug = models.CharField(max_length=255)
-    heuristic = models.OneToOneField(
-        "LabelHeuristic",
+    prompt_id = models.CharField(max_length=255)
+    name = models.CharField(max_length=255)
+    content = models.TextField(blank=True, default="")
+    built_in = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "prompt_id"],
+                name="prompt_project_promptid_uniq",
+            )
+        ]
+
+
+class Thread(Base):
+    """Model for LLM threads tied to a label."""
+
+    label = models.ForeignKey(
+        Label, on_delete=models.CASCADE, related_name="threads"
+    )
+    model = models.CharField(
+        max_length=255, default=django_settings.DEFAULT_MODEL
+    )
+    state = models.JSONField(default=dict, blank=True)
+    total_cost = models.FloatField(default=0.0)
+    autopilot_locked = models.BooleanField(default=False)
+
+
+class LabelDocument(Base):
+    """Links a document to a label (e.g. as a training example)."""
+
+    label = models.ForeignKey(
+        Label, on_delete=models.CASCADE, related_name="label_documents"
+    )
+    document = models.ForeignKey(
+        "Document", on_delete=models.CASCADE, related_name="label_documents"
+    )
+    prediction = models.CharField(
+        max_length=3,
+        blank=True,
+        default="",
+        choices=[("yes", "yes"), ("no", "no")],
+    )
+    prediction_confidence = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["label", "document"],
+                name="labeldocument_label_document_uniq",
+            )
+        ]
+
+
+class ClassificationAnnotation(Base):
+    """An annotation on a label document."""
+
+    class Value(models.TextChoices):
+        YES = "yes"
+        NO = "no"
+        SKIP = "skip"
+
+    label_document = models.ForeignKey(
+        LabelDocument, on_delete=models.CASCADE, related_name="annotations"
+    )
+    value = models.CharField(max_length=4, choices=Value.choices)
+    source = models.CharField(max_length=255)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["label_document", "source"],
+                name="annotation_labeldoc_source_uniq",
+            )
+        ]
+
+
+class Task(Base):
+    """A pending task for a project (e.g. 'annotate label X')."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending"
+        IN_PROGRESS = "in_progress"
+        AWAITING_INPUT = "awaiting_input"
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="tasks"
+    )
+    prompt_id = models.CharField(max_length=255)
+    label = models.ForeignKey(
+        Label,
         on_delete=models.CASCADE,
         null=True,
         blank=True,
-        related_name="tag",
+        related_name="tasks",
     )
-
-    def save(self, *args, **kwargs):
-        self.slug = label2slug(self.name) + ":" + label2slug(self.label.name)
-        super().save(*args, **kwargs)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
 
     class Meta:
-        unique_together = ("name", "label")
-
-
-class LabelDecision(BaseModel):
-    """Model for label decision boundaries."""
-
-    label = models.ForeignKey(
-        Label, on_delete=models.CASCADE, related_name="decisions"
-    )
-    text_hash = models.CharField(max_length=255)
-    text = models.TextField(null=True, blank=True)
-    value = models.BooleanField()
-    reason = models.TextField()
-    added_to_sample = models.BooleanField(default=False)
-
-    def save(self, *args, added_to_sample=False, **kwargs):
-        self.added_to_sample = added_to_sample
-        super().save(*args, **kwargs)
-
-    class Meta:
-        unique_together = ("label", "text_hash")
-
-
-class LabelQuerystring(BaseModel):
-    """Model for label querystrings."""
-
-    label = models.ForeignKey(
-        Label, on_delete=models.CASCADE, related_name="querystrings"
-    )
-    querystring = models.TextField()
-    num_examples = models.IntegerField(default=50)
-    added_to_sample = models.BooleanField(default=False)
-
-    def save(self, *args, added_to_sample=False, **kwargs):
-        self.added_to_sample = added_to_sample
-        super().save(*args, **kwargs)
-
-    class Meta:
-        unique_together = ("label", "querystring")
-
-
-class LabelHeuristic(BaseModel):
-    """Model for label heuristics."""
-
-    label = models.ForeignKey(
-        Label, on_delete=models.CASCADE, related_name="heuristics"
-    )
-    querystring = models.TextField(null=True, blank=True)
-    custom = models.CharField(max_length=255, null=True, blank=True)
-    applied_at = models.DateTimeField(null=True, blank=True)
-    is_minimal = models.BooleanField(default=False)
-    is_likely = models.BooleanField(default=False)
-    num_examples = models.IntegerField(default=0)
-
-    def save(self, *args, **kwargs):
-        if sum([bool(self.querystring), bool(self.custom)]) != 1:
-            raise ValueError(
-                "Exactly one of querystring or custom must be provided."
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "prompt_id", "label"],
+                name="task_project_prompt_label_uniq",
             )
-        super().save(*args, **kwargs)
-        if self.applied_at is not None:
-            self.label.update_counts()
-
-    def delete(self, *args, **kwargs):
-        self.is_minimal = False
-        self.is_likely = False
-        self.save()
-        self.label.update_counts()
-        super().delete(*args, **kwargs)
-
-    @property
-    def name(self):
-        if self.querystring is not None:
-            return f"h:qs:{self.querystring}"
-        elif self.custom is not None:
-            return f"h:fn:{self.custom}"
-
-    @classmethod
-    def sync_custom_heuristics(cls):
-        for heuristic in cls.objects.filter(custom__isnull=False):
-            label = heuristic.label
-            if (
-                heuristic.custom not in custom_heuristics
-                or label.name
-                != custom_heuristics[heuristic.custom]["label_name"]
-                or label.project_id
-                != custom_heuristics[heuristic.custom]["project_id"]
-            ):
-                heuristic.delete()
-
-        for custom_name, custom_heuristic in custom_heuristics.items():
-            heuristic_exists = cls.objects.filter(
-                label__name=custom_heuristic["label_name"],
-                label__project_id=custom_heuristic["project_id"],
-                custom=custom_name,
-            ).exists()
-            if not heuristic_exists:
-                label, _ = Label.objects.get_or_create(
-                    name=custom_heuristic["label_name"],
-                    project_id=custom_heuristic["project_id"],
-                )
-                heuristic = cls.objects.create(
-                    label=label,
-                    custom=custom_name,
-                )
-
-    def get_apply_fn(self, **kwargs):
-        def apply_fn(text):
-            if self.querystring is not None:
-                text = text.lower()
-                querystring = self.querystring.lower()
-
-                for and_part in querystring.split(","):
-                    and_part = and_part.strip()
-                    meets_any_or = False
-                    for or_part in and_part.split("|"):
-                        or_part = or_part.strip()
-                        negated = False
-                        if or_part.startswith("~"):
-                            or_part = or_part[1:].strip()
-                            negated = True
-                        if or_part.startswith("^"):
-                            or_part = or_part[1:].strip()
-                            if text.startswith(or_part.strip()) != negated:
-                                meets_any_or = True
-                        elif (or_part.strip() in text) != negated:
-                            meets_any_or = True
-                    if not meets_any_or:
-                        return False
-                return True
-            elif self.custom is not None:
-                return custom_heuristics[self.custom]["apply_fn"](
-                    text, **kwargs
-                )
-
-        return apply_fn
-
-    def apply(self):
-        tag, _ = LabelTag.objects.get_or_create(
-            name=self.name, label=self.label, heuristic=self
-        )
-        apply_fn = self.get_apply_fn()
-        example_ids = []
-        model = self.label.project.get_search_model()
-        batch_size = 1000000
-        batches = model.objects.batch_df("id", "text", batch_size=batch_size)
-        for batch in tqdm(
-            batches,
-            desc="Applying heuristic",
-            total=model.objects.count() // batch_size,
-        ):
-            batch = batch[batch["text"].apply(apply_fn)]
-            example_ids.extend(batch["id"].tolist())
-        model.bulk_replace_tag(tag.id, example_ids)
-        self.applied_at = timezone.now()
-        self.num_examples = model.objects.tags(any=[tag.id]).count()
-        self.save()
-        self.label.update_counts()
+        ]
 
 
-class LabelTrainsetExample(BaseModel):
-    """Model for label trainset examples."""
+class Message(Base):
+    """Model for messages within a thread."""
 
-    label = models.ForeignKey(
-        Label, on_delete=models.CASCADE, related_name="trainset_examples"
+    thread = models.ForeignKey(
+        Thread, on_delete=models.CASCADE, related_name="messages"
     )
-    text_hash = models.CharField(max_length=255)
-    text = models.TextField(null=True, blank=True)
-    split = models.CharField(
-        max_length=10,
-        choices=[("train", "Train"), ("eval", "Eval")],
-    )
-    pred = models.BooleanField(null=True, blank=True)
-    reason = models.TextField(null=True, blank=True)
-
-    class Meta:
-        unique_together = ("label", "text_hash")
-
-
-class LabelFinetune(BaseModel):
-    """Model for single-label finetuned models."""
-
-    label = models.ForeignKey(
-        Label, on_delete=models.CASCADE, related_name="fintunes"
-    )
-    config_name = models.CharField(max_length=255)
-    eval_results = models.JSONField(null=True, blank=True)
-    finetuned_at = models.DateTimeField(null=True, blank=True)
-    predicted_at = models.DateTimeField(null=True, blank=True)
-
-
-class DocketEntry(SearchDocumentModel):
-    """Docket entry model for main document entries."""
-
-    project_id = "docket-entry"
-    finetune_configs = {
-        "main": {
-            "base_model_name": "answerdotai/ModernBERT-base",
-            "training_args": {
-                "num_train_epochs": 10,
-                "learning_rate": 5e-5,
-                "warmup_ratio": 0.05,
-                "bf16": True,
-            },
-        },
-    }
-    main_finetune_config = "main"
-
-    id = models.BigIntegerField(primary_key=True)
-    recap_id = models.BigIntegerField(unique=True)
-    docket_id = models.BigIntegerField()
-    entry_number = models.BigIntegerField(null=True, blank=True)
-    date_filed = models.DateField(null=True, blank=True)
-
-
-DocketEntry.create_tags_model()
-
-
-class DocketEntryShort(SearchDocumentModel):
-    """Model for attachments and docket entry short descriptions."""
-
-    project_id = "docket-entry-short"
-
-    text = models.TextField(unique=True)
-    text_type = models.CharField(
-        max_length=255,
-        choices=[
-            ("short_description", "Short Description"),
-            ("attachment", "Attachment"),
-        ],
-    )
-    count = models.IntegerField(default=0)
-
-
-DocketEntryShort.create_tags_model()
+    data = models.JSONField(default=dict)
+    num_tokens = models.IntegerField(default=0)
+    is_compact = models.BooleanField(default=False)
+    hidden = models.BooleanField(default=False)

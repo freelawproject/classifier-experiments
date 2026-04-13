@@ -75,20 +75,20 @@ class RemotePipeline:
                 for megabatch in megabatches
             ]
 
-        for future in tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc="Predicting",
-            disable=len(futures) < 2,
-        ):
-            result = future.result()
-            if result["status"] == "error":
-                raise Exception(result["errors"])
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Predicting",
+                disable=len(futures) < 2,
+            ):
+                result = future.result()
+                if result["status"] == "error":
+                    raise Exception(result["errors"])
 
-        results = []
-        for future in futures:
-            results += future.result()["results"]
-        return results
+            results = []
+            for future in futures:
+                results += future.result()["results"]
+            return results
 
     def __call__(self, *args, **kwargs):
         return self.predict(*args, **kwargs)

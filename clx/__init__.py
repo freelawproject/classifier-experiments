@@ -1,14 +1,7 @@
 # flake8: noqa: E402
-from pathlib import Path
-
-import simplejson as json
 from dotenv import load_dotenv
 
-config_path = Path.home() / ".cache" / "clx" / "config.json"
-if config_path.exists():
-    config = json.loads(config_path.read_text())
-    if config.get("autoload-env"):
-        load_dotenv(override=False)
+load_dotenv()
 
 from .utils import (
     S3,

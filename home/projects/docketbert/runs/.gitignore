@@ -1,5 +1,0 @@
-.*
-*/*
-!*/checkpoints
-!*/config.json
-!.gitignore

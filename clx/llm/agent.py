@@ -1,10 +1,32 @@
+import logging
+import time
 from typing import Any, ClassVar
 
 import litellm
 import simplejson as json
+import tiktoken
 from pydantic import BaseModel, Field
 
 litellm.drop_params = True
+
+_encoding = tiktoken.get_encoding("cl100k_base")
+
+
+def count_tokens(text: str) -> int:
+    """Count tokens in text using cl100k_base encoding."""
+    return len(_encoding.encode(text))
+
+
+logger = logging.getLogger("clx.llm")
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(name)s] %(message)s", datefmt="%H:%M:%S"
+        )
+    )
+    logger.addHandler(handler)
 
 
 class Tool(BaseModel):
@@ -78,21 +100,20 @@ class Agent:
         """Hook to run after initialization."""
         pass
 
+    # Fields to exclude from messages sent to the LLM.
+    _internal_fields = {"name", "args"}
+
     @property
     def sanitized_messages(self):
-        """Strip invalid fields from messages."""
-        sanitized_messages = []
-        for message in self.messages:
-            sanitized_message = {
-                "role": message["role"],
-                "content": message["content"],
+        """Strip internal fields from messages, preserving provider fields."""
+        return [
+            {
+                k: v
+                for k, v in message.items()
+                if k not in self._internal_fields
             }
-            if "tool_calls" in message:
-                sanitized_message["tool_calls"] = message["tool_calls"]
-            if message["role"] == "tool":
-                sanitized_message["tool_call_id"] = message["tool_call_id"]
-            sanitized_messages.append(sanitized_message)
-        return sanitized_messages
+            for message in self.messages
+        ]
 
     @property
     def tool_history(self):
@@ -123,13 +144,39 @@ class Agent:
         completion_args["messages"] = self.sanitized_messages
 
         # Make the completion call
+        logger.info("Calling LLM...")
+        t0 = time.time()
         self.r = litellm.completion(**completion_args)
+        llm_elapsed = time.time() - t0
         response_message = dict(self.r.choices[0].message)
+
+        # Log the call
+        model = completion_args.get("model", "?")
+        usage = self.r.usage
+        tokens = (
+            f"{usage.prompt_tokens}→{usage.completion_tokens}"
+            if usage
+            else "?"
+        )
+        try:
+            cost = (
+                f"${litellm.completion_cost(completion_response=self.r):.4f}"
+            )
+        except Exception:
+            cost = "$?"
+        tool_names = ""
         if response_message.get("tool_calls"):
             response_message["tool_calls"] = [
                 dict(tool_call, function=dict(tool_call.function))
                 for tool_call in response_message["tool_calls"]
             ]
+            tool_names = " → " + ", ".join(
+                tc["function"]["name"] for tc in response_message["tool_calls"]
+            )
+        logger.info(
+            f"{model} | {tokens} tokens | {cost} | "
+            f"{llm_elapsed:.1f}s{tool_names}"
+        )
         self.messages.append(response_message)
 
         # Run tools if present
@@ -138,7 +185,13 @@ class Agent:
                 tool_name = tool_call["function"]["name"]
                 tool = self.tools[tool_name]
                 tool_args = json.loads(tool_call["function"]["arguments"])
+                t0 = time.time()
                 tool_response = tool(**tool_args)(self) or "Success"
+                tool_elapsed = time.time() - t0
+                logger.info(
+                    f"  {tool_name} → {tool_elapsed:.1f}s | "
+                    f"{tool_response[:120]}"
+                )
                 self.messages.append(
                     {
                         "tool_call_id": tool_call["id"],
@@ -149,7 +202,12 @@ class Agent:
                     }
                 )
 
+        logger.info("Saving messages to DB...")
+        t0 = time.time()
         self.on_step(response_message)
+        save_elapsed = time.time() - t0
+        if save_elapsed > 0.5:
+            logger.info(f"  DB save took {save_elapsed:.1f}s")
         return response_message
 
     def on_step(self, response_message: dict):
@@ -167,7 +225,7 @@ class Agent:
                 messages, **completion_args, call_tools=True
             )
             messages = None  # Only pass messages on the first step
-            if self.r.choices[0].finish_reason != "tool_calls":
+            if not response_message.get("tool_calls"):
                 break
         return response_message
 
@@ -176,4 +234,17 @@ class Agent:
         pass
 
 
-__all__ = ["Agent", "Tool", "Field"]
+def message_tokens(msg: dict) -> int:
+    """Count the token length of a message's content."""
+    tokens = 0
+    content = msg.get("content")
+    if content:
+        tokens += count_tokens(content)
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function", {})
+        tokens += count_tokens(fn.get("name", ""))
+        tokens += count_tokens(fn.get("arguments", ""))
+    return tokens
+
+
+__all__ = ["Agent", "Tool", "Field", "count_tokens", "message_tokens"]

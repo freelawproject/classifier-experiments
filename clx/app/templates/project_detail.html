@@ -1,0 +1,1653 @@
+{% extends "base.html" %}
+
+{% block navbar %}{% endblock %}
+
+{% block content %}
+<div x-data="{
+         activeTab: 'overview',
+         tasks: [],
+         tasksLoading: false,
+         documents: [],
+         page: 1,
+         hasNext: false,
+         totalCount: null,
+         countLoading: false,
+         loading: true,
+         queryString: '',
+         showQueryHelp: false,
+         projectName: '{{ project.name|escapejs }}',
+         projectInstructions: '{{ project.instructions|escapejs }}',
+         autopilotEnabled: {{ project.autopilot_enabled|yesno:"true,false" }},
+         _savedProjectName: '{{ project.name|escapejs }}',
+         _savedProjectInstructions: '{{ project.instructions|escapejs }}',
+         _savedLabelName: null,
+         _savedLabelInstructions: null,
+         editingInstructions: false,
+         settingsSection: 'project',
+         activeLabel: null,
+         labels: [],
+         labelDropdownOpen: false,
+         showCreateLabelModal: false,
+         newLabelName: '',
+         editingLabelInstructions: false,
+         filterLabelOnly: false,
+         filterAnnotation: null,
+         filterPrediction: null,
+         sortOrder: 'shuffle',
+         sortDropdownOpen: false,
+         promptDropdownOpen: false,
+         prompts: [],
+         editingPrompt: null,
+         promptResetTarget: null,
+         promptDeleteTarget: null,
+         showCreatePromptModal: false,
+         newPromptName: '',
+         dangerAction: null,
+         dangerConfirmText: '',
+         threads: [],
+         activeThread: null,
+         threadToDelete: null,
+         chatMessages: [],
+         chatInput: '',
+         chatSending: false,
+         threadUsage: null,
+         labelStats: null,
+         finetune: null,
+         finetunePolling: null,
+         finetuneStarting: false,
+         finetuneArgsOpen: false,
+         predicting: false,
+         selectedModel: '{{ default_model }}',
+         modelDropdownOpen: false,
+         modelIds: {{ model_ids|safe }},
+         newThread() {
+             if (!this.activeLabel) return;
+             fetch('/api/projects/{{ project.id }}/labels/' + this.activeLabel.id + '/threads/create', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({model: this.selectedModel})
+             }).then(r => r.json()).then(thread => {
+                 this.fetchThreads().then(() => {
+                     const t = this.threads.find(t => t.id === thread.id);
+                     if (t) this.selectThread(t);
+                 });
+             });
+         },
+         selectThread(thread) {
+             this.activeThread = thread;
+             this.selectedModel = thread.model;
+             this.chatMessages = [];
+             this.threadUsage = null;
+             this.chatSending = this._sendingThreadId === thread.id;
+             this.resetChatInput();
+             fetch('/api/projects/{{ project.id }}/threads/' + thread.id + '/messages')
+                 .then(r => r.json())
+                 .then(data => {
+                     this.chatMessages = data.messages.map(m => m.data).filter(d => d.role !== 'system');
+                     this.threadUsage = data.usage;
+                     if (this.activeThread && this.activeThread.id === thread.id) {
+                         this.activeThread.autopilot_locked = data.autopilot_locked;
+                     }
+                     this.$nextTick(() => { this.scrollChat(); });
+                 });
+         },
+         sendMessage() {
+             const content = this.chatInput.trim();
+             if (!content || this.chatSending) return;
+             if (!this.activeThread) {
+                 // Auto-create thread then send
+                 if (!this.activeLabel) return;
+                 this.chatSending = true;
+                 fetch('/api/projects/{{ project.id }}/labels/' + this.activeLabel.id + '/threads/create', {
+                     method: 'POST',
+                     headers: {'Content-Type': 'application/json'},
+                     body: JSON.stringify({model: this.selectedModel})
+                 }).then(r => r.json()).then(thread => {
+                     const newThread = {id: thread.id, model: thread.model, preview: '', updated_at: new Date().toISOString(), is_autopilot: false, autopilot_locked: false};
+                     // Insert after autopilot thread to maintain sort order.
+                     const apIdx = this.threads.findIndex(t => t.is_autopilot);
+                     if (apIdx >= 0) {
+                         this.threads.splice(apIdx + 1, 0, newThread);
+                     } else {
+                         this.threads.unshift(newThread);
+                     }
+                     this.activeThread = newThread;
+                     this._doSend(content);
+                 });
+                 return;
+             }
+             this.chatSending = true;
+             this._doSend(content);
+         },
+         _doSend(content) {
+             const threadId = this.activeThread.id;
+             this.chatMessages.push({role: 'user', content: content});
+             this.resetChatInput();
+             this._sendingThreadId = threadId;
+             this.$nextTick(() => { this.scrollChat(); });
+             fetch('/api/projects/{{ project.id }}/threads/' + threadId + '/send', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({content})
+             }).then(r => r.json()).then(data => {
+                 // Set thread preview from first user message (only if not already set)
+                 const t = this.threads.find(t => t.id === threadId);
+                 if (t && !t.preview) t.preview = content.substring(0, 100);
+                 // Only update chat UI if still viewing the same thread
+                 if (this.activeThread && this.activeThread.id === threadId) {
+                     this.chatMessages.push(...data.messages);
+                     this.threadUsage = data.usage;
+                     this.chatSending = false;
+                     this.$nextTick(() => { this.scrollChat(); });
+                 }
+                 if (this._sendingThreadId === threadId) this._sendingThreadId = null;
+                 // Refresh project/label data if agent updated instructions
+                 const toolNames = data.messages
+                     .filter(m => m.role === 'assistant' && m.tool_calls)
+                     .flatMap(m => m.tool_calls.map(tc => tc.function.name));
+                 if (toolNames.includes('UpdateProjectInstructions')) {
+                     fetch('/api/projects/{{ project.id }}/update', {
+                         method: 'POST',
+                         headers: {'Content-Type': 'application/json'},
+                         body: JSON.stringify({})
+                     }).then(r => r.json()).then(p => {
+                         this.projectName = p.name;
+                         this.projectInstructions = p.instructions;
+                     });
+                 }
+                 if (toolNames.includes('UpdateLabelInstructions')) {
+                     this.fetchLabels();
+                 }
+                 if (toolNames.includes('AddTrainingExamples') || toolNames.includes('Annotate')) {
+                     this.fetchLabelStats();
+                 }
+             }).catch(() => {
+                 if (this._sendingThreadId === threadId) this._sendingThreadId = null;
+                 if (this.activeThread && this.activeThread.id === threadId) this.chatSending = false;
+             });
+         },
+         scrollChat() {
+             const el = document.getElementById('chat-scroll');
+             if (el) el.scrollTop = el.scrollHeight;
+         },
+         resetChatInput() {
+             this.chatInput = '';
+             this.$nextTick(() => {
+                 const ta = document.getElementById('chat-input');
+                 if (ta) { ta.style.height = 'auto'; }
+             });
+         },
+         _filterParams() {
+             const p = new URLSearchParams();
+             if (this.queryString.trim()) p.set('q', this.queryString.trim());
+             if ((this.filterLabelOnly || this.filterAnnotation || this.filterPrediction) && this.activeLabel) p.set('label', this.activeLabel.id);
+             if (this.filterAnnotation && this.activeLabel) p.set('annotation', this.filterAnnotation);
+             if (this.filterPrediction && this.activeLabel) p.set('prediction', this.filterPrediction);
+             if (this.sortOrder !== 'shuffle') p.set('sort', this.sortOrder);
+             return p.toString();
+         },
+         search() {
+             this.activeTab = 'search';
+             this.page = 1;
+             this.totalCount = null;
+             this.fetchDocs();
+         },
+         fetchDocs() {
+             this.loading = true;
+             const params = this._filterParams();
+             const qs = 'page=' + this.page + (params ? '&' + params : '');
+             fetch('/api/projects/{{ project.id }}/docs?' + qs)
+                 .then(r => r.json())
+                 .then(data => {
+                     this.documents = data.documents;
+                     this.page = data.page;
+                     this.hasNext = data.has_next;
+                     this.loading = false;
+                 })
+                 .catch(() => { this.loading = false; });
+         },
+         fetchCount() {
+             if (this.countLoading) return;
+             this.countLoading = true;
+             const params = this._filterParams();
+             fetch('/api/projects/{{ project.id }}/docs/count' + (params ? '?' + params : ''))
+                 .then(r => r.json())
+                 .then(data => {
+                     this.totalCount = data.total_count;
+                     this.countLoading = false;
+                 })
+                 .catch(() => { this.countLoading = false; });
+         },
+         fetchLabels() {
+             fetch('/api/projects/{{ project.id }}/labels')
+                 .then(r => r.json())
+                 .then(data => {
+                     this.labels = data.labels;
+                     const active = data.active_label_id;
+                     this.activeLabel = this.labels.find(l => l.id === active) || this.labels[0] || null;
+                     if (this.activeLabel) {
+                         this._savedLabelName = this.activeLabel.name;
+                         this._savedLabelInstructions = this.activeLabel.instructions || '';
+                         this.fetchThreads();
+                         this.fetchLabelStats();
+                         this.fetchFinetune();
+                     }
+                 });
+         },
+         fetchLabelStats() {
+             if (!this.activeLabel) { this.labelStats = null; return; }
+             this.labelStats = this.activeLabel.stats || null;
+         },
+         fetchFinetune() {
+             if (!this.activeLabel) { this.finetune = null; return; }
+             fetch('/api/projects/{{ project.id }}/labels/' + this.activeLabel.id + '/finetune/status')
+                 .then(r => r.json())
+                 .then(data => {
+                     this.finetune = data;
+                     if (data.status === 'in_progress' && !this.finetunePolling) {
+                         this.startFinetunePolling();
+                     } else if (data.status !== 'in_progress' && this.finetunePolling) {
+                         this.stopFinetunePolling();
+                     }
+                 });
+         },
+         startFinetunePolling() {
+             if (this.finetunePolling) return;
+             this.finetunePolling = setInterval(() => { this.fetchFinetune(); }, 5000);
+         },
+         stopFinetunePolling() {
+             if (this.finetunePolling) { clearInterval(this.finetunePolling); this.finetunePolling = null; }
+         },
+         startFinetune() {
+             if (!this.activeLabel || this.finetuneStarting) return;
+             this.finetuneStarting = true;
+             fetch('/api/projects/{{ project.id }}/labels/' + this.activeLabel.id + '/finetune', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({})
+             }).then(r => r.json()).then(data => {
+                 this.finetuneStarting = false;
+                 if (data.error) { alert(data.error); return; }
+                 this.fetchFinetune();
+             }).catch(() => { this.finetuneStarting = false; });
+         },
+         finetuneIsUpToDate() {
+             if (!this.finetune || this.finetune.status !== 'completed') return false;
+             if (!this.finetune.finetuned_at) return false;
+             if (!this.finetune.latest_annotation_at) return true;
+             return this.finetune.finetuned_at >= this.finetune.latest_annotation_at;
+         },
+         runPredictions() {
+             if (!this.activeLabel || this.predicting) return;
+             this.predicting = true;
+             fetch('/api/projects/{{ project.id }}/labels/' + this.activeLabel.id + '/predict', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({})
+             }).then(r => r.json()).then(data => {
+                 this.predicting = false;
+                 if (data.error) { alert(data.error); return; }
+                 if (this.activeLabel) {
+                     if (data.predicted_at) this.activeLabel.predicted_at = data.predicted_at;
+                     if (data.prediction_stats) this.activeLabel.prediction_stats = data.prediction_stats;
+                 }
+             }).catch(() => { this.predicting = false; });
+         },
+         fetchThreads() {
+             if (!this.activeLabel) { this.threads = []; return Promise.resolve(); }
+             return fetch('/api/projects/{{ project.id }}/labels/' + this.activeLabel.id + '/threads')
+                 .then(r => r.json())
+                 .then(data => { this.threads = data.threads; });
+         },
+         deleteThread() {
+             if (!this.threadToDelete) return;
+             const id = this.threadToDelete.id;
+             fetch('/api/projects/{{ project.id }}/threads/' + id + '/delete', { method: 'POST' })
+                 .then(() => {
+                     this.threads = this.threads.filter(t => t.id !== id);
+                     if (this.activeThread && this.activeThread.id === id) {
+                         this.activeThread = null;
+                         this.chatMessages = [];
+                         this.chatSending = false;
+                     }
+                     this.threadToDelete = null;
+                 });
+         },
+         switchLabel(label) {
+             this.labelDropdownOpen = false;
+             if (this.activeLabel && this.activeLabel.id === label.id) return;
+             this.stopFinetunePolling();
+             this.finetune = null;
+             this.finetuneArgsOpen = false;
+             this.activeLabel = label;
+             this._savedLabelName = label.name;
+             this._savedLabelInstructions = label.instructions || '';
+             this.activeThread = null;
+             this.chatMessages = [];
+             this.chatInput = '';
+             this.threadUsage = null;
+             fetch('/api/projects/{{ project.id }}/labels/' + label.id + '/activate', { method: 'POST' });
+             this.fetchThreads();
+             this.fetchLabelStats();
+             this.fetchFinetune();
+             if (this.activeTab !== 'agent') this.fetchDocs();
+         },
+         createLabel() {
+             const name = this.newLabelName.trim();
+             if (!name) return;
+             fetch('/api/projects/{{ project.id }}/labels/create', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({name})
+             }).then(r => r.json()).then(label => {
+                 this.labels.push(label);
+                 this.switchLabel(label);
+                 this.newLabelName = '';
+                 this.showCreateLabelModal = false;
+             });
+         },
+         saveLabel() {
+             if (!this.activeLabel) return;
+             fetch('/api/projects/{{ project.id }}/labels/' + this.activeLabel.id + '/rename', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({name: this.activeLabel.name, instructions: this.activeLabel.instructions || ''})
+             }).then(r => r.json()).then(updated => {
+                 this.activeLabel.name = updated.name;
+                 this.activeLabel.instructions = updated.instructions;
+                 this._savedLabelName = updated.name;
+                 this._savedLabelInstructions = updated.instructions || '';
+                 const idx = this.labels.findIndex(l => l.id === updated.id);
+                 if (idx !== -1) {
+                     this.labels[idx].name = updated.name;
+                     this.labels[idx].instructions = updated.instructions;
+                 }
+                 this.editingLabelInstructions = false;
+             });
+         },
+         saveProject() {
+             const name = this.projectName.trim();
+             if (!name) return;
+             fetch('/api/projects/{{ project.id }}/update', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({
+                     name,
+                     instructions: this.projectInstructions,
+                 })
+             }).then(r => r.json()).then(updated => {
+                 this.projectName = updated.name;
+                 this.projectInstructions = updated.instructions;
+                 this._savedProjectName = updated.name;
+                 this._savedProjectInstructions = updated.instructions;
+                 this.editingInstructions = false;
+             });
+         },
+         fetchPrompts() {
+             fetch('/api/projects/{{ project.id }}/prompts')
+                 .then(r => r.json())
+                 .then(data => { this.prompts = data.prompts; });
+         },
+         fetchTasks() {
+             this.tasksLoading = true;
+             fetch('/api/projects/{{ project.id }}/tasks/update', { method: 'POST' })
+                 .then(r => r.json())
+                 .then(data => { this.tasks = data.tasks; this.tasksLoading = false; })
+                 .catch(() => { this.tasksLoading = false; });
+         },
+         fetchTasksQuiet() {
+             fetch('/api/projects/{{ project.id }}/tasks')
+                 .then(r => r.json())
+                 .then(data => { this.tasks = data.tasks; });
+         },
+         navigateToTask(task) {
+             const targetLabelId = task.label ? task.label.id : (this.activeLabel ? this.activeLabel.id : null);
+             if (!targetLabelId) return;
+             const label = this.labels.find(l => l.id === targetLabelId);
+             if (!label) return;
+             if (!this.activeLabel || this.activeLabel.id !== label.id) {
+                 this.activeLabel = label;
+                 this._savedLabelName = label.name;
+                 this._savedLabelInstructions = label.instructions || '';
+                 this.activeThread = null;
+                 this.chatMessages = [];
+                 this.threadUsage = null;
+                 fetch('/api/projects/{{ project.id }}/labels/' + label.id + '/activate', { method: 'POST' });
+                 this.fetchLabelStats();
+             }
+             this.activeTab = 'agent';
+             this.fetchThreads().then(() => {
+                 const apThread = this.threads.find(t => t.is_autopilot);
+                 if (apThread) this.selectThread(apThread);
+             });
+         },
+         savePrompt(prompt) {
+             fetch('/api/projects/{{ project.id }}/prompts/' + prompt.id + '/update', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({ content: prompt.content })
+             }).then(r => r.json()).then(updated => {
+                 const idx = this.prompts.findIndex(p => p.id === updated.id);
+                 if (idx >= 0) this.prompts[idx] = updated;
+                 if (this.editingPrompt === prompt.id) this.editingPrompt = null;
+             });
+         },
+         resetPrompt(prompt) {
+             fetch('/api/projects/{{ project.id }}/prompts/' + prompt.id + '/reset', {
+                 method: 'POST'
+             }).then(r => r.json()).then(updated => {
+                 const idx = this.prompts.findIndex(p => p.id === updated.id);
+                 if (idx >= 0) this.prompts[idx] = updated;
+                 this.promptResetTarget = null;
+             });
+         },
+         createPrompt() {
+             const name = this.newPromptName.trim();
+             if (!name) return;
+             fetch('/api/projects/{{ project.id }}/prompts/create', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({ name })
+             }).then(r => r.json()).then(prompt => {
+                 this.prompts.push(prompt);
+                 this.newPromptName = '';
+                 this.showCreatePromptModal = false;
+                 this.editingPrompt = prompt.id;
+             });
+         },
+         deletePrompt(prompt) {
+             fetch('/api/projects/{{ project.id }}/prompts/' + prompt.id + '/delete', {
+                 method: 'POST'
+             }).then(() => {
+                 this.prompts = this.prompts.filter(p => p.id !== prompt.id);
+                 this.promptDeleteTarget = null;
+             });
+         },
+         confirmDanger(action) {
+             this.dangerAction = action;
+             this.dangerConfirmText = '';
+         },
+         executeDanger() {
+             if (!this.dangerAction) return;
+             if (this.dangerAction === 'deleteProject') {
+                 fetch('/api/projects/{{ project.id }}/delete', { method: 'POST' })
+                     .then(() => { window.location.href = '/'; });
+             } else if (this.dangerAction === 'deleteLabel' && this.activeLabel) {
+                 const labelId = this.activeLabel.id;
+                 fetch('/api/projects/{{ project.id }}/labels/' + labelId + '/delete', { method: 'POST' })
+                     .then(() => {
+                         this.dangerAction = null;
+                         this.labels = this.labels.filter(l => l.id !== labelId);
+                         this.activeLabel = this.labels[0] || null;
+                         if (this.activeLabel) this.fetchThreads();
+                         else { this.threads = []; this.activeThread = null; this.chatMessages = []; }
+                     });
+             }
+         }
+     }"
+     x-init="fetchDocs(); fetchLabels(); fetchPrompts(); fetchTasks();
+              setInterval(() => { if (!autopilotEnabled) return; fetchTasksQuiet(); fetch('/api/projects/{{ project.id }}/labels').then(r => r.json()).then(data => { for (const l of data.labels) { const existing = labels.find(x => x.id === l.id); if (existing) { existing.stats = l.stats; existing.instructions = l.instructions; existing.name = l.name; existing.finetune_status = l.finetune_status; existing.finetuned_at = l.finetuned_at; existing.predicted_at = l.predicted_at; existing.prediction_stats = l.prediction_stats; } } if (!labels.some(l => data.labels.find(d => d.id === l.id)) || data.labels.length !== labels.length) { labels = data.labels; } if (activeLabel) { const updated = data.labels.find(l => l.id === activeLabel.id); if (updated) { activeLabel.stats = updated.stats; labelStats = updated.stats; const labelDirty = activeLabel.name !== _savedLabelName || (activeLabel.instructions || '') !== _savedLabelInstructions; if (!labelDirty) { activeLabel.name = updated.name; activeLabel.instructions = updated.instructions; } _savedLabelName = updated.name; _savedLabelInstructions = updated.instructions || ''; } } }); fetch('/api/projects/{{ project.id }}/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({}) }).then(r => r.json()).then(p => { const projDirty = projectName !== _savedProjectName || projectInstructions !== _savedProjectInstructions; if (!projDirty) { projectName = p.name; projectInstructions = p.instructions; } _savedProjectName = p.name; _savedProjectInstructions = p.instructions; }); if (activeThread && activeThread.is_autopilot) { const tid = activeThread.id; fetch('/api/projects/{{ project.id }}/threads/' + tid + '/messages').then(r => r.json()).then(data => { if (activeThread && activeThread.id === tid) { const newMsgs = data.messages.map(m => m.data).filter(d => d.role !== 'system'); const changed = JSON.stringify(newMsgs) !== JSON.stringify(chatMessages); if (changed) { chatMessages = newMsgs; $nextTick(() => { scrollChat(); }); } threadUsage = data.usage; activeThread.autopilot_locked = data.autopilot_locked; } }); } }, 5000)"
+     class="flex-1 min-h-0 flex flex-col bg-slate-950">
+
+    <!-- Page-level navbar -->
+    <nav class="h-12 shrink-0 border-b border-slate-800 flex items-stretch px-5">
+        <!-- Project name -->
+        <div class="flex items-center shrink-0 mr-6">
+            <a href="/" class="text-slate-500 hover:text-slate-300 transition-colors mr-3" title="All Projects">
+                <i class="fas fa-chevron-left text-[10px]"></i>
+            </a>
+            <span class="text-sm font-semibold text-slate-200 truncate" x-text="projectName"></span>
+        </div>
+        <!-- Tabs (centered) -->
+        <div class="flex-1 flex items-stretch justify-center gap-3">
+            <template x-for="tab in [
+                {id: 'overview', icon: 'fa-list-check', label: 'Overview'},
+                {id: 'search', icon: 'fa-search', label: 'Search'},
+                {id: 'agent', icon: 'fa-robot', label: 'Agent'},
+                {id: 'settings', icon: 'fa-gear', label: 'Settings'}
+            ]" :key="tab.id">
+                <button @click="activeTab = tab.id; settingsSection = 'project'; if (activeLabel) { activeLabel.name = _savedLabelName; activeLabel.instructions = _savedLabelInstructions || ''; } projectName = _savedProjectName; projectInstructions = _savedProjectInstructions;"
+                        class="px-4 text-xs font-medium flex items-center gap-1.5 border-b-2 transition-colors"
+                        :class="activeTab === tab.id
+                            ? 'border-indigo-400 text-indigo-400'
+                            : 'border-transparent text-slate-500 hover:text-slate-300 hover:border-slate-600'">
+                    <i class="fas" :class="tab.icon"></i>
+                    <span x-text="tab.label"></span>
+                </button>
+            </template>
+        </div>
+        <!-- Autopilot toggle -->
+        <div class="flex items-center shrink-0 ml-6">
+            <button @click="fetch('/api/projects/{{ project.id }}/autopilot/toggle', { method: 'POST' }).then(r => r.json()).then(data => { autopilotEnabled = data.autopilot_enabled; })"
+                    class="flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md border transition-colors"
+                    :class="autopilotEnabled
+                        ? 'bg-amber-600/20 border-amber-600/50 text-amber-400 hover:bg-amber-600/30'
+                        : 'bg-slate-800 border-slate-700 text-slate-500 hover:bg-slate-700 hover:text-slate-300'">
+                <i class="fas fa-circle-play text-[10px]"></i>
+                <span>Autopilot</span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Three-column layout -->
+    <div class="grid grid-cols-[280px_1fr_340px] flex-1 min-h-0">
+        <!-- Left sidebar -->
+        <aside class="border-r border-slate-800 flex flex-col min-h-0">
+
+            <!-- Agent tab: Thread history -->
+            <div x-show="activeTab === 'agent'" class="flex-1 flex flex-col min-h-0 scrollable-panel scrollable-dark">
+                <!-- Thread list -->
+                <template x-for="thread in threads" :key="thread.id">
+                    <div @click="selectThread(thread)"
+                         class="w-full px-4 py-3 text-left border-b border-slate-800/60 hover:bg-slate-800/50 transition-colors cursor-pointer flex items-center gap-2"
+                         :class="[
+                             activeThread && activeThread.id === thread.id ? 'bg-slate-800/50 border-l-2 border-l-indigo-500' : '',
+                             thread.is_autopilot ? 'border-b-slate-700' : ''
+                         ]">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-1.5">
+                                <i x-show="thread.is_autopilot" class="fas fa-circle-play text-[10px] text-amber-500"></i>
+                                <p class="text-xs truncate"
+                                   :class="thread.is_autopilot ? 'text-amber-400 font-medium' : 'text-slate-300'"
+                                   x-text="thread.is_autopilot ? 'Autopilot' : (thread.preview || 'New chat')"></p>
+                            </div>
+                            <p class="text-xs text-slate-500 mt-0.5" x-text="thread.model"></p>
+                        </div>
+                        <button x-show="!thread.is_autopilot" @click.stop="threadToDelete = thread"
+                                class="shrink-0 text-slate-600 hover:text-red-400 transition-colors">
+                            <i class="fas fa-xmark text-xs"></i>
+                        </button>
+                    </div>
+                </template>
+                <div x-show="threads.length === 0" class="px-4 py-6 text-center">
+                    <span class="text-xs text-slate-600">No threads yet</span>
+                </div>
+            </div>
+
+            <!-- Settings tab: Section nav -->
+            <div x-show="activeTab === 'settings'" x-cloak class="flex-1 flex flex-col min-h-0 p-4">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Settings</h3>
+                <div class="space-y-1">
+                    <template x-for="sec in [
+                        {id: 'project', icon: 'fa-folder', label: 'Project Settings'},
+                        {id: 'label', icon: 'fa-tag', label: 'Label Settings'},
+                        {id: 'prompts', icon: 'fa-bolt', label: 'Prompts'},
+                        {id: 'danger', icon: 'fa-triangle-exclamation', label: 'Danger Zone'}
+                    ]" :key="sec.id">
+                        <button @click="settingsSection = sec.id; if (activeLabel) { activeLabel.name = _savedLabelName; activeLabel.instructions = _savedLabelInstructions || ''; } projectName = _savedProjectName; projectInstructions = _savedProjectInstructions;"
+                                class="w-full text-left px-3 py-2 text-xs rounded-md transition-colors flex items-center gap-2"
+                                :class="settingsSection === sec.id
+                                    ? (sec.id === 'danger' ? 'bg-red-950/30 text-red-400' : 'bg-slate-800 text-indigo-400')
+                                    : (sec.id === 'danger' ? 'text-red-400/60 hover:bg-slate-800/50 hover:text-red-400' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200')">
+                            <i class="fas text-[10px]" :class="sec.icon"></i>
+                            <span x-text="sec.label"></span>
+                        </button>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Overview tab: empty left sidebar -->
+            <div x-show="activeTab === 'overview'" x-cloak class="flex-1 flex flex-col min-h-0">
+            </div>
+
+            <!-- Search tab: Filters panel -->
+            <div x-show="activeTab === 'search'" x-cloak class="p-4 scrollable-panel scrollable-dark">
+                <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Filters</h3>
+                <div class="flex items-center justify-between mb-1">
+                    <label class="text-xs font-medium text-slate-500">Query</label>
+                    <button @click="showQueryHelp = !showQueryHelp"
+                            class="text-slate-500 hover:text-slate-300 transition-colors"
+                            title="Query syntax help">
+                        <i class="fas fa-circle-info text-xs"></i>
+                    </button>
+                </div>
+                <div x-show="showQueryHelp" x-cloak
+                     class="mb-2 p-2.5 bg-slate-800 border border-slate-700 rounded-md text-xs text-slate-400 leading-relaxed">
+                    <p class="font-medium text-slate-300 mb-1">Query syntax</p>
+                    <div class="space-y-0.5">
+                        <p><code class="text-slate-200">,</code> AND</p>
+                        <p><code class="text-slate-200">|</code> OR</p>
+                        <p><code class="text-slate-200">~</code> NOT</p>
+                        <p><code class="text-slate-200">^</code> STARTS WITH</p>
+                        <p><code class="text-slate-200">( )</code> grouping</p>
+                    </div>
+                    <p class="mt-1.5 text-slate-500">Example: <code class="text-slate-300">foo, bar | baz</code> matches <em>foo</em> AND (<em>bar</em> OR <em>baz</em>)</p>
+                </div>
+                <textarea x-model="queryString"
+                          @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); search(); }"
+                          @input="$el.style.height = 'auto'; $el.style.height = $el.scrollHeight + 'px'"
+                          rows="1"
+                          placeholder="e.g. foo, bar | baz"
+                          class="w-full bg-slate-800 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 mb-4 resize-none overflow-hidden placeholder:text-slate-600"></textarea>
+                <label class="text-xs font-medium text-slate-500 mb-1.5 block">Annotations</label>
+                <button @click="filterLabelOnly = !filterLabelOnly; if (!filterLabelOnly) { filterAnnotation = null; filterPrediction = null; } search()"
+                        class="w-full px-3 py-1.5 text-xs font-medium rounded-md border transition-colors flex items-center justify-center gap-1.5"
+                        :class="filterLabelOnly || filterAnnotation ? 'bg-teal-600 border-teal-600 text-white hover:bg-teal-500 hover:border-teal-500' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-slate-200'">
+                    <i class="fas fa-tag text-[10px]"></i> Train Examples
+                </button>
+                <div class="flex rounded-md overflow-hidden ring-1 ring-slate-700 mt-2">
+                    <template x-for="(opt, idx) in ['yes', 'no', 'skip', 'none', 'any']" :key="opt">
+                        <button @click="filterAnnotation = filterAnnotation === opt ? null : opt; if (filterAnnotation) { filterLabelOnly = true; filterPrediction = null; } search()"
+                                class="flex-1 px-2 py-1.5 text-xs font-medium transition-colors capitalize"
+                                :class="[
+                                    filterAnnotation === opt
+                                        ? (opt === 'yes' ? 'bg-emerald-600 text-white' : opt === 'no' ? 'bg-red-600 text-white' : opt === 'skip' ? 'bg-amber-600 text-white' : opt === 'any' ? 'bg-indigo-600 text-white' : 'bg-slate-600 text-white')
+                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200',
+                                    idx < 4 ? 'border-r border-slate-700' : ''
+                                ]"
+                                x-text="opt">
+                        </button>
+                    </template>
+                </div>
+                <label class="text-xs font-medium text-slate-500 mb-1.5 mt-4 block">Predictions</label>
+                <div class="flex rounded-md overflow-hidden ring-1 ring-slate-700">
+                    <template x-for="(opt, idx) in ['yes', 'no', 'any', 'disagree']" :key="opt">
+                        <button @click="filterPrediction = filterPrediction === opt ? null : opt; if (filterPrediction) { filterLabelOnly = true; filterAnnotation = null; } search()"
+                                class="flex-1 px-2 py-1.5 text-xs font-medium transition-colors capitalize"
+                                :class="[
+                                    filterPrediction === opt
+                                        ? (opt === 'yes' ? 'bg-emerald-600 text-white' : opt === 'no' ? 'bg-red-600 text-white' : opt === 'disagree' ? 'bg-orange-600 text-white' : 'bg-indigo-600 text-white')
+                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200',
+                                    idx < 3 ? 'border-r border-slate-700' : ''
+                                ]"
+                                x-text="opt">
+                        </button>
+                    </template>
+                </div>
+                <button @click="search()"
+                        class="w-full mt-6 px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-500 transition-colors">
+                    <i class="fas fa-search mr-1"></i> Search
+                </button>
+            </div>
+        </aside>
+
+        <!-- Center column -->
+        <div class="flex flex-col min-h-0">
+            <!-- Tab: Agent (Chat) -->
+            <div x-show="activeTab === 'agent'" class="flex-1 flex flex-col min-h-0 bg-slate-900 relative">
+                <!-- Thread usage stats (floating) -->
+                <div x-show="threadUsage && threadUsage.total_tokens > 0" x-cloak
+                     class="absolute top-3 left-3 z-10 px-2.5 py-1 text-[11px] rounded-md bg-slate-800/90 text-slate-500 shadow-md border border-slate-700 flex items-center gap-2">
+                    <span x-text="(threadUsage?.total_tokens || 0).toLocaleString() + ' tok'"></span>
+                    <span class="text-slate-700">|</span>
+                    <span x-text="'$' + (threadUsage?.total_cost || 0).toFixed(4)"></span>
+                </div>
+                <!-- Floating action buttons (top-right) -->
+                <div x-show="activeThread" class="absolute top-3 right-3 z-10 flex items-center gap-1.5">
+                    <button @click="if (!chatSending) { chatSending = true; _doSend('Compact your memory now. Write a detailed summary of our conversation.'); }"
+                            :disabled="chatSending"
+                            class="px-2.5 py-1 text-xs rounded-md bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-colors shadow-md border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Compact memory">
+                        <i class="fas fa-broom text-[10px] mr-1"></i> Compact
+                    </button>
+                    <button @click="activeThread = null; chatMessages = []; chatSending = false; threadUsage = null"
+                            class="px-2.5 py-1 text-xs rounded-md bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-colors shadow-md border border-slate-700"
+                            title="New thread">
+                        <i class="fas fa-plus text-[10px] mr-1"></i> New thread
+                    </button>
+                </div>
+                <!-- Chat messages -->
+                <div id="chat-scroll" class="flex-1 overflow-y-auto px-4 pb-4 pt-12 scrollable-panel scrollable-dark">
+                    <div x-show="chatMessages.length === 0 && !chatSending" class="flex items-center justify-center h-full">
+                        <span class="text-sm text-slate-600">Start a conversation</span>
+                    </div>
+                    <div class="space-y-4">
+                        <template x-for="(msg, i) in chatMessages" :key="i">
+                            <div>
+                                <!-- User message -->
+                                <template x-if="msg.role === 'user'">
+                                    <div class="flex justify-end">
+                                        <div class="max-w-[80%] rounded-lg px-4 py-2.5 bg-indigo-600 text-white">
+                                            <div class="text-sm prose-chat prose-chat-white" x-html="renderMarkdown(msg.content)"></div>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <!-- Assistant message with content -->
+                                <template x-if="msg.role === 'assistant' && msg.content">
+                                    <div class="flex justify-start">
+                                        <div class="max-w-[80%]">
+                                            <!-- Thinking block (collapsible) -->
+                                            <template x-if="msg.reasoning_content">
+                                                <div class="mb-1.5" x-data="{ expanded: false }">
+                                                    <button @click="expanded = !expanded"
+                                                            class="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors mb-1">
+                                                        <i class="fas fa-lightbulb text-[10px]"></i>
+                                                        <span>Thinking</span>
+                                                        <i class="fas text-[10px]" :class="expanded ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                                                    </button>
+                                                    <div x-show="expanded" x-cloak
+                                                         class="bg-amber-950/30 border border-amber-800/40 rounded-md px-3 py-2 max-h-48 overflow-y-auto">
+                                                        <p class="text-xs text-amber-200/80 whitespace-pre-wrap" x-text="msg.reasoning_content"></p>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                            <div class="rounded-lg px-4 py-2.5 bg-slate-800 text-slate-200">
+                                                <div class="text-sm prose-chat prose-chat-dark" x-html="renderMarkdown(msg.content)"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <!-- Assistant tool calls (may also have thinking) -->
+                                <template x-if="msg.role === 'assistant' && msg.tool_calls">
+                                    <div class="flex justify-start">
+                                        <div class="max-w-[80%] space-y-1.5">
+                                            <!-- Thinking block before tool calls -->
+                                            <template x-if="msg.reasoning_content">
+                                                <div x-data="{ expanded: false }">
+                                                    <button @click="expanded = !expanded"
+                                                            class="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors mb-1">
+                                                        <i class="fas fa-lightbulb text-[10px]"></i>
+                                                        <span>Thinking</span>
+                                                        <i class="fas text-[10px]" :class="expanded ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                                                    </button>
+                                                    <div x-show="expanded" x-cloak
+                                                         class="bg-amber-950/30 border border-amber-800/40 rounded-md px-3 py-2 max-h-48 overflow-y-auto">
+                                                        <p class="text-xs text-amber-200/80 whitespace-pre-wrap" x-text="msg.reasoning_content"></p>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                            <template x-for="tc in msg.tool_calls" :key="tc.id">
+                                                <div>
+                                                    <!-- AskUser tool call -->
+                                                    <template x-if="tc.function.name === 'AskUser'">
+                                                        <div x-data="{ customAnswer: '' }" class="bg-teal-950/40 border border-teal-800/40 rounded-lg px-4 py-3 text-left">
+                                                            <p class="text-sm font-medium text-slate-200 mb-3" x-text="JSON.parse(tc.function.arguments).question"></p>
+                                                            <div class="flex flex-col gap-1.5 items-start mb-3">
+                                                                <template x-for="opt in JSON.parse(tc.function.arguments).options" :key="opt">
+                                                                    <button @click="chatInput = (chatInput ? chatInput + '\n' : '') + 'Q: ' + JSON.parse(tc.function.arguments).question + '\nA: ' + opt; $nextTick(() => { const ta = document.querySelector('#chat-input'); if (ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; } })"
+                                                                            class="px-3 py-1.5 text-xs text-left rounded-md border border-teal-700/50 bg-teal-900/30 text-teal-300 hover:bg-teal-800/40 transition-colors">
+                                                                        <span x-text="opt"></span>
+                                                                    </button>
+                                                                </template>
+                                                            </div>
+                                                            <label class="block text-xs text-slate-400 mb-1">Something else</label>
+                                                            <div class="flex gap-2">
+                                                                <input type="text" x-model="customAnswer"
+                                                                       @keydown.enter.prevent="if (customAnswer.trim()) { chatInput = (chatInput ? chatInput + '\n' : '') + 'Q: ' + JSON.parse(tc.function.arguments).question + '\nA: ' + customAnswer.trim(); customAnswer = ''; $nextTick(() => { const ta = document.querySelector('#chat-input'); if (ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; } }); }"
+                                                                       placeholder="Type your answer..."
+                                                                       class="flex-1 bg-slate-800/60 border border-slate-700/50 rounded-md px-2.5 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-teal-500">
+                                                                <button @click="if (customAnswer.trim()) { chatInput = (chatInput ? chatInput + '\n' : '') + 'Q: ' + JSON.parse(tc.function.arguments).question + '\nA: ' + customAnswer.trim(); customAnswer = ''; $nextTick(() => { const ta = document.querySelector('#chat-input'); if (ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; } }); }"
+                                                                        class="px-2.5 py-1.5 text-xs rounded-md bg-teal-700/40 text-teal-300 hover:bg-teal-600/40 transition-colors">
+                                                                    <i class="fas fa-arrow-right text-[10px]"></i>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </template>
+                                                    <!-- Other tool calls -->
+                                                    <template x-if="tc.function.name !== 'AskUser'">
+                                                        <div x-data="{ expanded: false }" class="bg-slate-800/50 border border-slate-700/50 rounded-md">
+                                                            <button @click="expanded = !expanded" class="w-full flex items-center gap-2 text-xs px-3 py-2 hover:bg-slate-700/30 transition-colors rounded-md">
+                                                                <i class="fas fa-wrench text-slate-500 text-[10px]"></i>
+                                                                <span class="font-medium text-slate-300" x-text="tc.function.name"></span>
+                                                                <i class="fas text-[10px] text-slate-500 ml-auto" :class="expanded ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                                                            </button>
+                                                            <div x-show="expanded" x-cloak class="px-3 pb-2">
+                                                                <pre class="text-xs text-slate-400 whitespace-pre-wrap bg-slate-900/50 rounded px-2.5 py-2 max-h-48 overflow-y-auto" x-text="JSON.stringify(JSON.parse(tc.function.arguments), null, 2)"></pre>
+                                                            </div>
+                                                        </div>
+                                                    </template>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <!-- CompactMemory summary -->
+                                <template x-if="msg.role === 'tool' && msg.name === 'CompactMemory'">
+                                    <div class="flex justify-center my-2">
+                                        <div x-data="{ expanded: false }" class="max-w-[90%] w-full">
+                                            <button @click="expanded = !expanded"
+                                                    class="w-full flex items-center justify-center gap-2 py-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors">
+                                                <div class="flex-1 border-t border-slate-700/50"></div>
+                                                <i class="fas fa-broom text-[10px]"></i>
+                                                <span>Memory compacted</span>
+                                                <i class="fas text-[10px]" :class="expanded ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                                                <div class="flex-1 border-t border-slate-700/50"></div>
+                                            </button>
+                                            <div x-show="expanded" x-cloak
+                                                 class="mt-1 bg-slate-800/60 border border-slate-700/40 rounded-lg px-4 py-3">
+                                                <div class="text-xs text-slate-400 prose-chat prose-chat-dark max-h-64 overflow-y-auto"
+                                                     x-html="renderMarkdown(msg.content || '')"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <!-- Tool response (hide AskUser and CompactMemory responses) -->
+                                <template x-if="msg.role === 'tool' && msg.name !== 'AskUser' && msg.name !== 'CompactMemory'">
+                                    <div class="flex justify-start">
+                                        <div class="max-w-[80%] bg-slate-800/50 border border-slate-700/50 rounded-md px-3 py-2">
+                                            <div class="flex items-center gap-1.5 mb-1">
+                                                <i class="fas fa-reply text-slate-500 text-[10px]"></i>
+                                                <span class="text-xs font-medium text-slate-400" x-text="msg.name"></span>
+                                            </div>
+                                            <p class="text-xs text-slate-400 whitespace-pre-wrap max-h-32 overflow-y-auto" x-text="msg.content"></p>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                        <div x-show="chatSending" class="flex justify-start">
+                            <div class="bg-slate-800 rounded-lg px-4 py-2.5">
+                                <span class="text-sm text-slate-400"><i class="fas fa-spinner fa-spin mr-1"></i> Thinking...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Autopilot lock banner -->
+                <div x-show="activeThread && activeThread.autopilot_locked" x-cloak
+                     class="shrink-0 px-4 py-2 bg-amber-950/30 border-b border-amber-800/30 text-center">
+                    <span class="text-xs text-amber-400">
+                        <i class="fas fa-lock mr-1"></i>
+                        Autopilot is working on this thread. Chat is temporarily disabled.
+                    </span>
+                </div>
+                <!-- Chat input -->
+                <div class="shrink-0 px-4 pb-4 pt-2" :class="activeThread && activeThread.autopilot_locked ? 'opacity-50 pointer-events-none' : ''">
+                    <div class="border border-slate-700 rounded-lg bg-slate-800 focus-within:ring-1 focus-within:ring-indigo-500 focus-within:border-indigo-500 flex flex-col">
+                        <div class="max-h-40 overflow-y-auto">
+                            <textarea id="chat-input"
+                                      x-model="chatInput"
+                                      @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); sendMessage(); }"
+                                      @input="const wrap = $el.parentElement; const st = wrap.scrollTop; $el.style.height = 'auto'; $el.style.height = $el.scrollHeight + 'px'; wrap.scrollTop = st"
+                                      rows="1"
+                                      placeholder="Send a message..."
+                                      :disabled="activeThread && activeThread.autopilot_locked"
+                                      class="w-full px-3 pt-2.5 pb-1 text-sm text-slate-200 resize-none overflow-hidden focus:outline-none bg-transparent placeholder:text-slate-600"></textarea>
+                        </div>
+                        <div class="flex items-center justify-between px-2 pb-2">
+                            <!-- Model selector -->
+                            <div class="relative">
+                                <button @click="modelDropdownOpen = !modelDropdownOpen"
+                                        class="flex items-center gap-1 px-2 py-1 text-xs text-slate-500 hover:text-slate-300 rounded transition-colors">
+                                    <i class="fas fa-microchip"></i>
+                                    <span x-text="selectedModel.split('/').pop()"></span>
+                                    <i class="fas fa-chevron-down text-[10px]"></i>
+                                </button>
+                                <div x-show="modelDropdownOpen" x-cloak
+                                     @click.outside="modelDropdownOpen = false"
+                                     class="absolute bottom-full left-0 mb-1 bg-slate-800 border border-slate-700 rounded-lg shadow-lg z-20 min-w-[220px] max-h-48 overflow-y-auto">
+                                    <template x-for="mid in modelIds" :key="mid">
+                                        <button @click="selectedModel = mid; modelDropdownOpen = false"
+                                                class="w-full text-left px-3 py-2 text-xs hover:bg-slate-700 transition-colors flex items-center gap-2"
+                                                :class="selectedModel === mid ? 'text-indigo-400 font-medium' : 'text-slate-300'">
+                                            <i class="fas fa-check text-[10px]" :class="selectedModel === mid ? 'text-indigo-400' : 'invisible'"></i>
+                                            <span x-text="mid"></span>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                            <!-- Prompt selector & Send button -->
+                            <div class="flex items-center gap-1.5">
+                                <div class="relative">
+                                    <button @click="promptDropdownOpen = !promptDropdownOpen"
+                                            class="w-7 h-7 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"
+                                            title="Insert prompt">
+                                        <i class="fas fa-bolt text-xs"></i>
+                                    </button>
+                                    <div x-show="promptDropdownOpen" x-cloak
+                                         @click.outside="promptDropdownOpen = false"
+                                         class="absolute bottom-full right-0 mb-1 bg-slate-800 border border-slate-700 rounded-lg shadow-lg z-20 min-w-[200px] max-h-48 overflow-y-auto">
+                                        <template x-for="prompt in prompts" :key="prompt.id">
+                                            <button @click="chatInput = prompt.content; promptDropdownOpen = false; $nextTick(() => { const ta = document.getElementById('chat-input'); if (ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; } })"
+                                                    class="w-full text-left px-3 py-2 text-xs text-slate-300 hover:bg-slate-700 transition-colors">
+                                                <span x-text="prompt.name"></span>
+                                            </button>
+                                        </template>
+                                        <div x-show="prompts.length === 0" class="px-3 py-2 text-xs text-slate-500">No prompts</div>
+                                    </div>
+                                </div>
+                                <button @click="sendMessage()"
+                                        :disabled="!chatInput.trim() || chatSending"
+                                        class="w-7 h-7 flex items-center justify-center rounded-md transition-colors"
+                                        :class="chatInput.trim() && !chatSending ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-700 text-slate-500 cursor-not-allowed'">
+                                    <i class="fas fa-arrow-up text-xs"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Search -->
+            <div x-show="activeTab === 'search'" x-cloak class="flex-1 flex flex-col min-h-0 bg-slate-900 relative">
+                <!-- Count (floating top-left) -->
+                <div class="absolute top-3 left-3 z-10">
+                    <div x-show="totalCount !== null"
+                         class="px-2.5 py-1 text-[11px] rounded-md bg-slate-800/90 text-slate-500 shadow-md border border-slate-700">
+                        <span x-text="(totalCount ?? 0).toLocaleString()"></span> document<span x-show="totalCount !== 1">s</span>
+                    </div>
+                    <button x-show="totalCount === null && !countLoading"
+                            @click="fetchCount()"
+                            class="px-2.5 py-1 text-[11px] rounded-md bg-slate-800/90 text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-colors shadow-md border border-slate-700">
+                        <i class="fas fa-calculator mr-1"></i> Get count
+                    </button>
+                    <span x-show="countLoading"
+                          class="px-2.5 py-1 text-[11px] rounded-md bg-slate-800/90 text-slate-500 shadow-md border border-slate-700 inline-block">
+                        <i class="fas fa-spinner fa-spin mr-1"></i> Counting...
+                    </span>
+                </div>
+                <!-- Sort + Pagination (floating top-right) -->
+                <div class="absolute top-3 right-3 z-10 flex items-center gap-1.5">
+                    <!-- Sort dropdown -->
+                    <div class="relative">
+                        <button @click="sortDropdownOpen = !sortDropdownOpen"
+                                class="px-2.5 py-1 text-[11px] font-medium rounded-md bg-slate-800/90 shadow-md border border-slate-700 text-slate-400 hover:text-slate-200 transition-colors flex items-center gap-1.5">
+                            <i class="fas fa-arrow-down-short-wide text-[9px]"></i>
+                            <span x-text="sortOrder === 'shuffle' ? 'Shuffle' : 'Tricky'"></span>
+                            <i class="fas fa-chevron-down text-[8px] text-slate-600"></i>
+                        </button>
+                        <div x-show="sortDropdownOpen" x-cloak
+                             @click.outside="sortDropdownOpen = false"
+                             class="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-md shadow-lg overflow-hidden min-w-[100px]">
+                            <template x-for="opt in [{id:'shuffle',label:'Shuffle'},{id:'tricky',label:'Tricky'}]" :key="opt.id">
+                                <button @click="sortOrder = opt.id; sortDropdownOpen = false; page = 1; fetchDocs();"
+                                        class="w-full text-left px-3 py-1.5 text-[11px] font-medium transition-colors flex items-center gap-2"
+                                        :class="sortOrder === opt.id ? 'text-indigo-400' : 'text-slate-400 hover:bg-slate-700 hover:text-slate-200'">
+                                    <i class="fas fa-check text-[8px]" :class="sortOrder === opt.id ? 'text-indigo-400' : 'invisible'"></i>
+                                    <span x-text="opt.label"></span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+                    <!-- Pagination -->
+                    <div class="flex items-center rounded-md bg-slate-800/90 shadow-md border border-slate-700 overflow-hidden">
+                        <button @click="page--; fetchDocs()"
+                                :disabled="page <= 1"
+                                class="px-2 py-1 text-xs transition-colors"
+                                :class="page <= 1 ? 'text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-slate-200'">
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        <span class="text-[11px] text-slate-500 px-0.5" x-text="page"></span>
+                        <button @click="page++; fetchDocs()"
+                                :disabled="!hasNext"
+                                class="px-2 py-1 text-xs transition-colors"
+                                :class="!hasNext ? 'text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-slate-200'">
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+                <!-- Scrollable document area -->
+                <div class="flex-1 overflow-y-auto pt-12 pb-32 scrollable-panel scrollable-dark">
+                    <div x-show="loading" class="flex items-center justify-center py-12">
+                        <span class="text-sm text-slate-500">Loading...</span>
+                    </div>
+                    <div x-show="!loading">
+                        <template x-for="doc in documents" :key="doc.id">
+                            <div class="px-4 py-3 border-b border-slate-800 border-l-2 border-l-transparent hover:border-l-indigo-500 hover:bg-slate-800/50 transition-colors cursor-default flex items-start gap-2">
+                                <p class="text-sm text-slate-300 flex-1" x-text="doc.text"></p>
+                                <div class="shrink-0 flex items-center gap-1 mt-0.5">
+                                    <span x-show="doc.prediction_confidence != null"
+                                          class="text-[10px] text-slate-600 w-8 text-right"
+                                          x-text="doc.prediction_confidence != null ? (doc.prediction_confidence * 100).toFixed(0) + '%' : ''"></span>
+                                    <span x-show="doc.prediction"
+                                          class="w-14 inline-flex items-center justify-center py-0.5 rounded ring-1 ring-inset text-[10px] font-semibold uppercase"
+                                          :class="doc.prediction === 'yes' ? 'ring-emerald-600/50 text-emerald-500' : 'ring-red-600/50 text-red-500'">
+                                        <i class="fas fa-circle-nodes text-[8px] mr-1 opacity-60"></i><span x-text="doc.prediction"></span>
+                                    </span>
+                                    <span x-show="doc.annotation"
+                                          class="w-10 inline-flex items-center justify-center py-0.5 rounded text-[10px] font-semibold uppercase"
+                                          :class="doc.annotation === 'yes' ? 'bg-emerald-900/50 text-emerald-400' : doc.annotation === 'no' ? 'bg-red-900/50 text-red-400' : 'bg-amber-900/50 text-amber-400'"
+                                          x-text="doc.annotation"></span>
+                                </div>
+                            </div>
+                        </template>
+                        <div x-show="documents.length === 0" class="flex items-center justify-center py-12">
+                            <span class="text-sm text-slate-500">No documents yet.</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Overview -->
+            <div x-show="activeTab === 'overview'" x-cloak class="flex-1 flex flex-col min-h-0 bg-slate-900 relative">
+                <!-- New label button (floating) -->
+                <button @click="newLabelName = ''; showCreateLabelModal = true"
+                        class="absolute top-3 right-3 z-10 px-2.5 py-1 text-xs rounded-md bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-colors shadow-md border border-slate-700"
+                        title="New label">
+                    <i class="fas fa-plus text-[10px] mr-1"></i> New label
+                </button>
+                <div class="flex-1 overflow-y-auto p-4 pt-12 pb-32 scrollable-panel scrollable-dark">
+                <div class="space-y-3">
+                    <template x-for="label in labels" :key="label.id">
+                        <div @click="switchLabel(label)" class="border rounded-lg px-4 py-3 transition-colors cursor-pointer" :class="activeLabel && activeLabel.id === label.id ? 'border-indigo-500/50 bg-indigo-950/20' : 'border-slate-800 bg-slate-900 hover:border-slate-700'">
+                            <div class="flex items-center gap-2">
+                                <i class="fas fa-tag text-slate-500 text-xs"></i>
+                                <span class="text-sm text-slate-300" x-text="label.name"></span>
+                                <div class="ml-auto flex items-center gap-3">
+                                    <span class="flex items-center gap-1.5 text-[11px]" :class="label.instructions?.trim() ? 'text-emerald-500' : 'text-slate-600'">
+                                        <i class="fas" :class="label.instructions?.trim() ? 'fa-circle-check' : 'fa-circle'"></i>
+                                        Instructions
+                                    </span>
+                                    <span class="flex items-center gap-1.5 text-[11px]"
+                                          :class="label.finetune_status === 'completed'
+                                              ? (label.finetuned_at && label.stats?.latest_annotation_at && label.finetuned_at < label.stats.latest_annotation_at ? 'text-amber-400' : 'text-emerald-500')
+                                              : 'text-slate-600'">
+                                        <i class="fas" :class="label.finetune_status === 'completed'
+                                            ? (label.finetuned_at && label.stats?.latest_annotation_at && label.finetuned_at < label.stats.latest_annotation_at ? 'fa-circle' : 'fa-circle-check')
+                                            : (label.finetune_status === 'in_progress' ? 'fa-spinner fa-spin' : 'fa-circle')"></i>
+                                        Finetuned
+                                    </span>
+                                    <span class="flex items-center gap-1.5 text-[11px]" :class="label.predicted_at && label.finetuned_at && label.predicted_at >= label.finetuned_at ? 'text-emerald-500' : 'text-slate-600'">
+                                        <i class="fas" :class="label.predicted_at && label.finetuned_at && label.predicted_at >= label.finetuned_at ? 'fa-circle-check' : 'fa-circle'"></i>
+                                        Predicted
+                                    </span>
+                                </div>
+                            </div>
+                            <template x-if="label.stats?.total > 0">
+                                <div class="mt-2">
+                                    <div class="flex h-1.5 rounded-full overflow-hidden bg-slate-800">
+                                        <div class="bg-emerald-500 transition-all" :style="'width:' + (label.stats.yes / label.stats.total * 100) + '%'"></div>
+                                        <div class="bg-red-500 transition-all" :style="'width:' + (label.stats.no / label.stats.total * 100) + '%'"></div>
+                                        <div class="bg-amber-500 transition-all" :style="'width:' + (label.stats.skip / label.stats.total * 100) + '%'"></div>
+                                        <div class="bg-slate-600 transition-all" :style="'width:' + (label.stats.unannotated / label.stats.total * 100) + '%'"></div>
+                                    </div>
+                                    <div class="flex items-center gap-3 mt-1.5">
+                                        <span class="text-[10px] text-slate-500"><span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1"></span><span x-text="label.stats.yes"></span></span>
+                                        <span class="text-[10px] text-slate-500"><span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500 mr-1"></span><span x-text="label.stats.no"></span></span>
+                                        <span class="text-[10px] text-slate-500"><span class="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 mr-1"></span><span x-text="label.stats.skip"></span></span>
+                                        <span class="text-[10px] text-slate-500"><span class="inline-block w-1.5 h-1.5 rounded-full bg-slate-600 mr-1"></span><span x-text="label.stats.unannotated"></span></span>
+                                        <span class="text-[10px] text-slate-500 ml-auto" x-text="label.stats.total + ' total'"></span>
+                                    </div>
+                                </div>
+                            </template>
+                            <template x-if="label.prediction_stats && label.prediction_stats.f1 !== undefined">
+                                <div class="flex items-center gap-3 mt-1.5">
+                                    <span class="text-[10px] text-slate-500">F1 <span class="text-slate-400" x-text="(label.prediction_stats.f1 * 100).toFixed(1) + '%'"></span></span>
+                                    <span class="text-[10px] text-slate-500">Acc <span class="text-slate-400" x-text="(label.prediction_stats.accuracy * 100).toFixed(1) + '%'"></span></span>
+                                    <span class="text-[10px] text-slate-600 ml-auto" x-text="'n=' + label.prediction_stats.total"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                    <div x-show="labels.length === 0" class="flex items-center justify-center py-12">
+                        <span class="text-sm text-slate-500">No labels yet.</span>
+                    </div>
+                </div>
+                </div>
+            </div>
+
+            <!-- Tab: Settings -->
+            <div x-show="activeTab === 'settings'" x-cloak class="flex-1 flex flex-col min-h-0 bg-slate-900">
+                <!-- Label Settings -->
+                <div x-show="settingsSection === 'label'" class="flex-1 flex flex-col min-h-0 relative">
+                    <button x-show="activeLabel && (activeLabel.name !== _savedLabelName || (activeLabel.instructions || '') !== _savedLabelInstructions)"
+                            @click="saveLabel()"
+                            class="absolute top-3 right-3 z-10 px-2.5 py-1 text-xs rounded-md bg-indigo-600 text-white hover:bg-indigo-500 transition-colors shadow-md border border-indigo-500"
+                            title="Save changes">
+                        <i class="fas fa-check text-[10px] mr-1"></i> Save
+                    </button>
+                    <div class="flex-1 overflow-y-auto pb-32 scrollable-panel scrollable-dark">
+                    <div class="p-4">
+                        <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Label Settings</h3>
+                    </div>
+                    <template x-if="activeLabel">
+                    <div class="px-4 pb-6 space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-300 mb-1">Label Name</label>
+                            <input type="text"
+                                   x-model="activeLabel.name"
+                                   class="w-full bg-slate-800 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-1">
+                                <label class="text-sm font-medium text-slate-300">Instructions</label>
+                                <button @click="editingLabelInstructions = !editingLabelInstructions; if (editingLabelInstructions) { $nextTick(() => { const ta = document.getElementById('label-instructions-textarea'); if (ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; ta.focus(); } }); }"
+                                        class="flex items-center gap-1.5 text-xs transition-colors"
+                                        :class="editingLabelInstructions ? 'text-indigo-400 hover:text-indigo-300' : 'text-slate-500 hover:text-slate-300'">
+                                    <i class="fas" :class="editingLabelInstructions ? 'fa-eye' : 'fa-pen'"></i>
+                                    <span x-text="editingLabelInstructions ? 'Preview' : 'Edit'"></span>
+                                </button>
+                            </div>
+                            <div x-show="!editingLabelInstructions"
+                                 class="bg-slate-800 border border-slate-700 rounded-md px-3 py-2 min-h-[2.5rem]">
+                                <div x-show="activeLabel.instructions && activeLabel.instructions.trim()"
+                                     class="text-sm text-slate-300 prose-chat prose-chat-dark"
+                                     x-html="renderMarkdown(activeLabel.instructions || '')"></div>
+                                <p x-show="!activeLabel.instructions || !activeLabel.instructions.trim()" class="text-sm text-slate-600 italic">No instructions yet.</p>
+                            </div>
+                            <textarea x-show="editingLabelInstructions" x-cloak
+                                      id="label-instructions-textarea"
+                                      x-model="activeLabel.instructions"
+                                      @input="$el.style.height = 'auto'; $el.style.height = $el.scrollHeight + 'px'"
+                                      rows="3"
+                                      placeholder="Label-specific instructions for the agent..."
+                                      class="w-full bg-slate-800 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none placeholder:text-slate-600"></textarea>
+                        </div>
+                    </div>
+                    </template>
+                    <div x-show="!activeLabel" class="px-4 pb-4">
+                        <p class="text-sm text-slate-500">No label selected.</p>
+                    </div>
+                    </div>
+                </div>
+
+                <!-- Project Settings -->
+                <div x-show="settingsSection === 'project'" class="flex-1 flex flex-col min-h-0 relative">
+                    <button x-show="projectName !== _savedProjectName || projectInstructions !== _savedProjectInstructions"
+                            @click="saveProject()"
+                            class="absolute top-3 right-3 z-10 px-2.5 py-1 text-xs rounded-md bg-indigo-600 text-white hover:bg-indigo-500 transition-colors shadow-md border border-indigo-500"
+                            title="Save changes">
+                        <i class="fas fa-check text-[10px] mr-1"></i> Save
+                    </button>
+                    <div class="flex-1 overflow-y-auto pb-32 scrollable-panel scrollable-dark">
+                    <div class="p-4">
+                        <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Project Settings</h3>
+                    </div>
+                    <div class="px-4 pb-6 space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-300 mb-1">Project Name</label>
+                            <input type="text"
+                                   x-model="projectName"
+                                   class="w-full bg-slate-800 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-1">
+                                <label class="text-sm font-medium text-slate-300">Instructions</label>
+                                <button @click="editingInstructions = !editingInstructions; if (editingInstructions) { $nextTick(() => { const ta = document.getElementById('instructions-textarea'); if (ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; ta.focus(); } }); }"
+                                        class="flex items-center gap-1.5 text-xs transition-colors"
+                                        :class="editingInstructions ? 'text-indigo-400 hover:text-indigo-300' : 'text-slate-500 hover:text-slate-300'">
+                                    <i class="fas" :class="editingInstructions ? 'fa-eye' : 'fa-pen'"></i>
+                                    <span x-text="editingInstructions ? 'Preview' : 'Edit'"></span>
+                                </button>
+                            </div>
+                            <div x-show="!editingInstructions"
+                                 class="bg-slate-800 border border-slate-700 rounded-md px-3 py-2 min-h-[2.5rem]">
+                                <div x-show="projectInstructions.trim()"
+                                     class="text-sm text-slate-300 prose-chat prose-chat-dark"
+                                     x-html="renderMarkdown(projectInstructions)"></div>
+                                <p x-show="!projectInstructions.trim()" class="text-sm text-slate-600 italic">No instructions yet.</p>
+                            </div>
+                            <textarea x-show="editingInstructions" x-cloak
+                                      id="instructions-textarea"
+                                      x-model="projectInstructions"
+                                      @input="$el.style.height = 'auto'; $el.style.height = $el.scrollHeight + 'px'"
+                                      rows="3"
+                                      placeholder="Project-level instructions for the agent..."
+                                      class="w-full bg-slate-800 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none placeholder:text-slate-600"></textarea>
+                        </div>
+                    </div>
+                    </div>
+                </div>
+
+                <!-- Prompts -->
+                <div x-show="settingsSection === 'prompts'" class="flex-1 flex flex-col min-h-0 relative">
+                    <button @click="newPromptName = ''; showCreatePromptModal = true"
+                            class="absolute top-3 right-3 z-10 px-2.5 py-1 text-xs rounded-md bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-colors shadow-md border border-slate-700"
+                            title="New prompt">
+                        <i class="fas fa-plus text-[10px] mr-1"></i> New prompt
+                    </button>
+                    <div class="flex-1 overflow-y-auto pb-32 scrollable-panel scrollable-dark">
+                    <div class="p-4">
+                        <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Prompts</h3>
+                    </div>
+                    <div class="px-4 pb-6 space-y-4">
+                        <template x-for="prompt in prompts" :key="prompt.id">
+                            <div class="border border-slate-800 rounded-lg p-3 bg-slate-900/50">
+                                <div class="flex items-center justify-between mb-2">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-sm font-medium text-slate-300" x-text="prompt.name"></span>
+                                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase"
+                                              :class="prompt.built_in ? 'bg-indigo-900/50 text-indigo-400' : 'bg-slate-700/50 text-slate-400'"
+                                              x-text="prompt.built_in ? 'Built-in' : 'Custom'"></span>
+                                    </div>
+                                    <div class="flex items-center gap-3">
+                                        <button x-show="prompt.built_in" @click="promptResetTarget = prompt"
+                                                class="text-xs text-slate-500 hover:text-slate-300 transition-colors">
+                                            <i class="fas fa-rotate-left text-[10px] mr-1"></i> Reset
+                                        </button>
+                                        <button x-show="!prompt.built_in" @click="promptDeleteTarget = prompt"
+                                                class="text-xs text-red-400/60 hover:text-red-400 transition-colors">
+                                            <i class="fas fa-trash text-[10px] mr-1"></i> Delete
+                                        </button>
+                                        <button @click="editingPrompt = editingPrompt === prompt.id ? null : prompt.id; if (editingPrompt === prompt.id) { $nextTick(() => { const ta = $el.closest('[x-data]')?.querySelector('#prompt-ta-' + prompt.id); if (ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; ta.focus(); } }); }"
+                                                class="flex items-center gap-1 text-xs transition-colors"
+                                                :class="editingPrompt === prompt.id ? 'text-indigo-400 hover:text-indigo-300' : 'text-slate-500 hover:text-slate-300'">
+                                            <i class="fas" :class="editingPrompt === prompt.id ? 'fa-eye' : 'fa-pen'"></i>
+                                            <span x-text="editingPrompt === prompt.id ? 'Preview' : 'Edit'"></span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div x-show="editingPrompt !== prompt.id"
+                                     class="bg-slate-800 border border-slate-700 rounded-md px-3 py-2 min-h-[2.5rem]">
+                                    <div x-show="prompt.content.trim()"
+                                         class="text-sm text-slate-300 prose-chat prose-chat-dark"
+                                         x-html="renderMarkdown(prompt.content || '')"></div>
+                                    <p x-show="!prompt.content.trim()" class="text-sm text-slate-600 italic">No content.</p>
+                                </div>
+                                <textarea x-show="editingPrompt === prompt.id" x-cloak
+                                          :id="'prompt-ta-' + prompt.id"
+                                          x-model="prompt.content"
+                                          @input="$el.style.height = 'auto'; $el.style.height = $el.scrollHeight + 'px'"
+                                          rows="3"
+                                          class="w-full bg-slate-800 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none placeholder:text-slate-600"></textarea>
+                                <div x-show="editingPrompt === prompt.id" class="flex justify-end mt-2">
+                                    <button @click="savePrompt(prompt)"
+                                            class="px-4 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-500 transition-colors">
+                                        Save
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                        <div x-show="prompts.length === 0" class="text-sm text-slate-500">No prompts configured.</div>
+                    </div>
+                    </div>
+                </div>
+
+                <!-- Danger Zone -->
+                <div x-show="settingsSection === 'danger'" class="flex-1 overflow-y-auto pb-32 scrollable-panel scrollable-dark">
+                    <div class="p-4">
+                        <h3 class="text-xs font-semibold text-red-400 uppercase tracking-wider">Danger Zone</h3>
+                    </div>
+                    <div class="px-4 pb-4 space-y-3">
+                        <div class="flex items-center justify-between bg-red-950/20 border border-red-900/30 rounded-lg px-4 py-3" x-show="activeLabel">
+                            <div>
+                                <p class="text-sm font-medium text-slate-300">Delete Label</p>
+                                <p class="text-xs text-slate-500" x-text="labels.length <= 1 ? 'Cannot delete the only label.' : 'Permanently delete this label and all its threads.'"></p>
+                            </div>
+                            <button @click="confirmDanger('deleteLabel')"
+                                    :disabled="labels.length <= 1"
+                                    class="px-3 py-1.5 text-xs font-medium rounded-md border transition-colors"
+                                    :class="labels.length <= 1 ? 'border-slate-700 text-slate-600 cursor-not-allowed' : 'border-red-700/50 text-red-400 hover:bg-red-900/30'">
+                                Delete
+                            </button>
+                        </div>
+                        <div class="flex items-center justify-between bg-red-950/20 border border-red-900/30 rounded-lg px-4 py-3">
+                            <div>
+                                <p class="text-sm font-medium text-slate-300">Delete Project</p>
+                                <p class="text-xs text-slate-500">Permanently delete this project, all labels, threads, and documents.</p>
+                            </div>
+                            <button @click="confirmDanger('deleteProject')"
+                                    class="px-3 py-1.5 text-xs font-medium rounded-md border border-red-700/50 text-red-400 hover:bg-red-900/30 transition-colors">
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right sidebar: Label panel -->
+        <aside class="border-l border-slate-800 flex flex-col min-h-0">
+            <!-- Active label section (top half) -->
+            <div class="h-1/2 flex flex-col min-h-0">
+                <div class="h-12 shrink-0 border-b border-slate-800 flex items-center px-4 relative">
+                    <button @click="labelDropdownOpen = !labelDropdownOpen"
+                            class="flex items-center gap-2 text-sm font-semibold text-slate-200 hover:text-white transition-colors min-w-0 w-full">
+                        <span x-text="activeLabel ? activeLabel.name : 'No label'" class="truncate"></span>
+                        <i class="fas fa-chevron-down text-slate-500 text-xs shrink-0 ml-auto"></i>
+                    </button>
+                    <!-- Label dropdown -->
+                    <div x-show="labelDropdownOpen"
+                         x-cloak
+                         @click.outside="labelDropdownOpen = false"
+                         class="absolute top-full left-0 right-0 bg-slate-800 border border-slate-700 rounded-b-lg shadow-lg z-10 max-h-60 overflow-y-auto">
+                        <template x-for="label in labels" :key="label.id">
+                            <button @click="switchLabel(label)"
+                                    class="w-full text-left px-4 py-2 text-sm hover:bg-slate-700 transition-colors flex items-center gap-2"
+                                    :class="activeLabel && activeLabel.id === label.id ? 'text-indigo-400 font-medium' : 'text-slate-300'">
+                                <i class="fas fa-check text-xs" :class="activeLabel && activeLabel.id === label.id ? 'text-indigo-400' : 'invisible'"></i>
+                                <span x-text="label.name" class="truncate"></span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+                <!-- Label stats -->
+                <div class="flex-1 overflow-y-auto scrollable-panel scrollable-dark">
+                    <div x-show="!labelStats || !labelStats.total" x-cloak class="px-4 py-4">
+                        <p class="text-xs text-slate-600 text-center">No data yet</p>
+                    </div>
+                    <div x-show="labelStats && labelStats.total > 0" x-cloak class="px-4 pt-3 pb-2">
+                        <div class="flex items-center justify-between mb-1.5">
+                            <span class="text-[11px] font-medium text-slate-400">Training Set</span>
+                            <span class="text-[11px] text-slate-500" x-text="labelStats?.total + ' examples'"></span>
+                        </div>
+                        <!-- Stacked bar -->
+                        <div class="flex h-2 rounded-full overflow-hidden bg-slate-800 mb-2">
+                            <div class="bg-emerald-500 transition-all" :style="'width:' + (labelStats?.total ? (labelStats.yes / labelStats.total * 100) : 0) + '%'"></div>
+                            <div class="bg-red-500 transition-all" :style="'width:' + (labelStats?.total ? (labelStats.no / labelStats.total * 100) : 0) + '%'"></div>
+                            <div class="bg-amber-500 transition-all" :style="'width:' + (labelStats?.total ? (labelStats.skip / labelStats.total * 100) : 0) + '%'"></div>
+                            <div class="bg-slate-600 transition-all" :style="'width:' + (labelStats?.total ? (labelStats.unannotated / labelStats.total * 100) : 0) + '%'"></div>
+                        </div>
+                        <!-- Legend -->
+                        <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+                            <div class="flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                                <span class="text-[10px] text-slate-500">Yes</span>
+                                <span class="text-[10px] text-slate-400 ml-auto" x-text="labelStats?.yes || 0"></span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-red-500 shrink-0"></span>
+                                <span class="text-[10px] text-slate-500">No</span>
+                                <span class="text-[10px] text-slate-400 ml-auto" x-text="labelStats?.no || 0"></span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+                                <span class="text-[10px] text-slate-500">Skip</span>
+                                <span class="text-[10px] text-slate-400 ml-auto" x-text="labelStats?.skip || 0"></span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-slate-600 shrink-0"></span>
+                                <span class="text-[10px] text-slate-500">None</span>
+                                <span class="text-[10px] text-slate-400 ml-auto" x-text="labelStats?.unannotated || 0"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Finetune section (only when label has data) -->
+                    <div x-show="labelStats && labelStats.total > 0" x-cloak class="px-4 pt-3 pb-3 border-t border-slate-800/60">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-[11px] font-medium text-slate-400">Model</span>
+                            <!-- Status badge -->
+                            <template x-if="finetune && finetune.status === 'completed' && finetuneIsUpToDate()">
+                                <span class="text-[10px] text-emerald-400 flex items-center gap-1">
+                                    <i class="fas fa-circle-check text-[9px]"></i> Up to date
+                                </span>
+                            </template>
+                            <template x-if="finetune && finetune.status === 'completed' && !finetuneIsUpToDate()">
+                                <span class="text-[10px] text-amber-400 flex items-center gap-1">
+                                    <i class="fas fa-triangle-exclamation text-[9px]"></i> Out of date
+                                </span>
+                            </template>
+                            <template x-if="finetune && finetune.status === 'error'">
+                                <span class="text-[10px] text-red-400 flex items-center gap-1">
+                                    <i class="fas fa-circle-xmark text-[9px]"></i> Error
+                                </span>
+                            </template>
+                            <template x-if="finetune && finetune.status === 'in_progress'">
+                                <span class="text-[10px] text-indigo-400 flex items-center gap-1">
+                                    <i class="fas fa-spinner fa-spin text-[9px]"></i> Training
+                                </span>
+                            </template>
+                        </div>
+                        <!-- Progress bar (in_progress) -->
+                        <template x-if="finetune && finetune.status === 'in_progress' && finetune.progress && finetune.progress.max_steps">
+                            <div class="mb-2">
+                                <div class="flex h-1.5 rounded-full overflow-hidden bg-slate-800">
+                                    <div class="bg-indigo-500 transition-all rounded-full"
+                                         :style="'width:' + (finetune.progress.step / finetune.progress.max_steps * 100) + '%'"></div>
+                                </div>
+                                <div class="flex justify-between mt-1">
+                                    <span class="text-[10px] text-slate-500" x-text="'Step ' + (finetune.progress.step || 0) + ' / ' + finetune.progress.max_steps"></span>
+                                    <span class="text-[10px] text-slate-500" x-text="Math.round((finetune.progress.step || 0) / finetune.progress.max_steps * 100) + '%'"></span>
+                                </div>
+                            </div>
+                        </template>
+                        <!-- Progress bar (in_progress, no step info yet) -->
+                        <template x-if="finetune && finetune.status === 'in_progress' && (!finetune.progress || !finetune.progress.max_steps)">
+                            <div class="mb-2">
+                                <div class="flex h-1.5 rounded-full overflow-hidden bg-slate-800">
+                                    <div class="bg-indigo-500/50 rounded-full animate-pulse w-full"></div>
+                                </div>
+                                <span class="text-[10px] text-slate-500 mt-1 block">Starting...</span>
+                            </div>
+                        </template>
+                        <!-- Training args (collapsed, only when completed) -->
+                        <template x-if="finetune && finetune.status === 'completed' && finetune.training_args && Object.keys(finetune.training_args).length > 0">
+                            <div class="mb-2">
+                                <button @click="finetuneArgsOpen = !finetuneArgsOpen"
+                                        class="text-[10px] text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1">
+                                    <i class="fas text-[8px] transition-transform" :class="finetuneArgsOpen ? 'fa-chevron-down' : 'fa-chevron-right'"></i>
+                                    Training Args
+                                </button>
+                                <div x-show="finetuneArgsOpen" x-cloak class="mt-1">
+                                    <pre class="text-[10px] text-slate-400 bg-slate-800 rounded-md p-2 overflow-x-auto max-h-32 scrollable-panel scrollable-dark" x-text="JSON.stringify(finetune.training_args, null, 2)"></pre>
+                                </div>
+                            </div>
+                        </template>
+                        <!-- Run finetune button -->
+                        <button @click="startFinetune()"
+                                :disabled="(finetune && finetune.status === 'in_progress') || finetuneStarting"
+                                class="w-full px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center justify-center gap-1.5"
+                                :class="(finetune && finetune.status === 'in_progress') || finetuneStarting
+                                    ? 'bg-slate-800 border border-slate-700 text-slate-600 cursor-not-allowed'
+                                    : 'bg-indigo-600 text-white hover:bg-indigo-500'">
+                            <i class="fas fa-circle-nodes text-[10px]"></i>
+                            <span x-text="finetuneStarting ? 'Starting...' : (finetune && finetune.status === 'in_progress' ? 'Training...' : 'Run Finetune')"></span>
+                        </button>
+                        <!-- Cancel finetune button -->
+                        <button x-show="finetune && finetune.status === 'in_progress' && !finetuneStarting"
+                                @click="fetch('/api/projects/{{ project.id }}/labels/' + activeLabel.id + '/finetune/cancel', {method:'POST'}).then(r => r.json()).then(() => { stopFinetunePolling(); fetchFinetune(); })"
+                                class="w-full mt-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-slate-700 text-slate-500 hover:text-red-400 hover:border-red-600/50 transition-colors flex items-center justify-center gap-1.5">
+                            <i class="fas fa-xmark text-[10px]"></i>
+                            Cancel
+                        </button>
+                        <!-- Prediction status -->
+                        <div class="border-t border-slate-800/60 my-3 -mx-4"></div>
+                        <div x-show="finetune && finetune.status === 'completed'" class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[11px] font-medium text-slate-400">Predictions</span>
+                                <button @click="if (!activeLabel) return; fetch('/api/projects/{{ project.id }}/labels/' + activeLabel.id + '/prediction-stats', {method:'POST'}).then(r => r.json()).then(data => { if (activeLabel && data.prediction_stats !== undefined) activeLabel.prediction_stats = data.prediction_stats; })"
+                                        class="text-slate-600 hover:text-slate-400 transition-colors" title="Recalculate stats">
+                                    <i class="fas fa-arrows-rotate text-[9px]"></i>
+                                </button>
+                            </div>
+                            <template x-if="activeLabel && activeLabel.predicted_at && activeLabel.finetuned_at && activeLabel.predicted_at >= activeLabel.finetuned_at">
+                                <span class="text-[10px] text-emerald-400 flex items-center gap-1">
+                                    <i class="fas fa-circle-check text-[9px]"></i> Predicted
+                                </span>
+                            </template>
+                            <template x-if="!activeLabel || !activeLabel.predicted_at || !activeLabel.finetuned_at || activeLabel.predicted_at < activeLabel.finetuned_at">
+                                <span class="text-[10px] text-slate-500 flex items-center gap-1">
+                                    <i class="fas fa-circle text-[9px]"></i> Needs predictions
+                                </span>
+                            </template>
+                        </div>
+                        <!-- Prediction stats -->
+                        <template x-if="activeLabel && activeLabel.prediction_stats && activeLabel.prediction_stats.f1 !== undefined">
+                            <div class="flex items-center gap-3 mb-2">
+                                <span class="text-[10px] text-slate-500">F1 <span class="text-slate-400" x-text="(activeLabel.prediction_stats.f1 * 100).toFixed(1) + '%'"></span></span>
+                                <span class="text-[10px] text-slate-500">Acc <span class="text-slate-400" x-text="(activeLabel.prediction_stats.accuracy * 100).toFixed(1) + '%'"></span></span>
+                                <span class="text-[10px] text-slate-600 ml-auto" x-text="'n=' + activeLabel.prediction_stats.total"></span>
+                            </div>
+                        </template>
+                        <!-- Run predictions button (only when finetune completed) -->
+                        <button x-show="finetune && finetune.status === 'completed'"
+                                @click="runPredictions()"
+                                :disabled="predicting"
+                                class="w-full px-3 py-1.5 text-xs font-medium rounded-md border transition-colors flex items-center justify-center gap-1.5"
+                                :class="predicting
+                                    ? 'bg-slate-800 border-slate-700 text-slate-600 cursor-not-allowed'
+                                    : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'">
+                            <i class="fas text-[10px]" :class="predicting ? 'fa-spinner fa-spin' : 'fa-play'"></i>
+                            <span x-text="predicting ? 'Predicting...' : 'Run Predictions'"></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <!-- Autopilot tasks (bottom half) -->
+            <div class="h-1/2 flex flex-col min-h-0">
+                <div class="h-12 shrink-0 border-t border-b border-slate-800 flex items-center justify-between px-4">
+                    <span class="text-sm font-semibold text-slate-200">Autopilot</span>
+                    <button @click="fetchTasks()"
+                            class="text-slate-500 hover:text-slate-300 transition-colors"
+                            title="Refresh tasks">
+                        <i class="fas fa-arrows-rotate text-xs" :class="tasksLoading && 'fa-spin'"></i>
+                    </button>
+                </div>
+                <div class="flex-1 overflow-y-auto px-4 pb-4 scrollable-panel scrollable-dark">
+                    <div class="space-y-1.5">
+                        <template x-for="task in tasks" :key="task.id">
+                            <div @click="navigateToTask(task)"
+                                 class="px-3 py-2.5 rounded-md bg-slate-800/50 border border-slate-800 hover:border-slate-700 transition-colors cursor-pointer">
+                                <div class="flex items-center justify-between gap-2 mb-1">
+                                    <span class="text-xs font-medium text-slate-300 truncate min-w-0" x-text="task.prompt_name"></span>
+                                    <span x-show="task.status === 'in_progress'"
+                                          class="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-indigo-600/30 text-indigo-400 font-medium">
+                                        <i class="fas fa-spinner fa-spin mr-0.5"></i> Working
+                                    </span>
+                                    <span x-show="task.status === 'awaiting_input'"
+                                          class="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-600/30 text-amber-400 font-medium animate-pulse">
+                                        <i class="fas fa-comment-dots mr-0.5"></i> Needs Input
+                                    </span>
+                                </div>
+                                <div x-show="task.label" class="flex items-center gap-1.5">
+                                    <i class="fas fa-tag text-[10px] text-slate-600"></i>
+                                    <span class="text-xs text-slate-500" x-text="task.label?.name"></span>
+                                </div>
+                            </div>
+                        </template>
+                        <div x-show="tasks.length === 0" class="text-center py-6">
+                            <span class="text-xs text-slate-600">No tasks</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Create Prompt Modal -->
+    <div x-show="showCreatePromptModal" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+         @keydown.escape.window="showCreatePromptModal = false">
+        <div class="bg-slate-900 rounded-xl border border-slate-700 shadow-modal p-6 w-full max-w-sm"
+             @click.outside="showCreatePromptModal = false">
+            <h2 class="text-lg font-semibold text-slate-200 mb-4">New Prompt</h2>
+            <form @submit.prevent="createPrompt()">
+                <label class="block text-sm font-medium text-slate-400 mb-1">Prompt Name</label>
+                <input type="text"
+                       x-model="newPromptName"
+                       required
+                       class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 mb-4 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 placeholder:text-slate-500"
+                       placeholder="Enter prompt name">
+                <div class="flex justify-end gap-3">
+                    <button type="button"
+                            @click="showCreatePromptModal = false"
+                            class="px-4 py-2 text-sm text-slate-400 hover:text-slate-200">
+                        Cancel
+                    </button>
+                    <button type="submit"
+                            class="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-500">
+                        Create
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Prompt Modal -->
+    <div x-show="promptDeleteTarget" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+         @keydown.escape.window="promptDeleteTarget = null">
+        <div class="bg-slate-900 rounded-xl border border-slate-700 shadow-modal p-6 w-full max-w-sm"
+             @click.outside="promptDeleteTarget = null">
+            <h2 class="text-lg font-semibold text-slate-200 mb-2">Delete Prompt</h2>
+            <p class="text-sm text-slate-400 mb-4">
+                Delete <strong class="text-slate-200" x-text="promptDeleteTarget?.name"></strong>? This cannot be undone.
+            </p>
+            <div class="flex justify-end gap-3">
+                <button @click="promptDeleteTarget = null"
+                        class="px-4 py-2 text-sm text-slate-400 hover:text-slate-200">Cancel</button>
+                <button @click="deletePrompt(promptDeleteTarget)"
+                        class="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-500">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reset Prompt Modal -->
+    <div x-show="promptResetTarget" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+         @keydown.escape.window="promptResetTarget = null">
+        <div class="bg-slate-900 rounded-xl border border-slate-700 shadow-modal p-6 w-full max-w-sm"
+             @click.outside="promptResetTarget = null">
+            <h2 class="text-lg font-semibold text-slate-200 mb-2">Reset Prompt</h2>
+            <p class="text-sm text-slate-400 mb-4">
+                Reset <strong class="text-slate-200" x-text="promptResetTarget?.name"></strong> to its default content? Your changes will be lost.
+            </p>
+            <div class="flex justify-end gap-3">
+                <button @click="promptResetTarget = null"
+                        class="px-4 py-2 text-sm text-slate-400 hover:text-slate-200">Cancel</button>
+                <button @click="resetPrompt(promptResetTarget)"
+                        class="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-500">Reset</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Label Modal -->
+    <div x-show="showCreateLabelModal" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+         @keydown.escape.window="showCreateLabelModal = false">
+        <div class="bg-slate-900 rounded-xl border border-slate-700 shadow-modal p-6 w-full max-w-sm"
+             @click.outside="showCreateLabelModal = false">
+            <h2 class="text-lg font-semibold text-slate-200 mb-4">New Label</h2>
+            <form @submit.prevent="createLabel()">
+                <label class="block text-sm font-medium text-slate-400 mb-1">Label Name</label>
+                <input type="text"
+                       x-model="newLabelName"
+                       required
+                       class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 mb-4 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 placeholder:text-slate-500"
+                       placeholder="Enter label name">
+                <div class="flex justify-end gap-3">
+                    <button type="button"
+                            @click="showCreateLabelModal = false"
+                            class="px-4 py-2 text-sm text-slate-400 hover:text-slate-200">
+                        Cancel
+                    </button>
+                    <button type="submit"
+                            class="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-500">
+                        Create
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Thread Modal -->
+    <div x-show="threadToDelete" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+         @keydown.escape.window="threadToDelete = null">
+        <div class="bg-slate-900 rounded-xl border border-slate-700 shadow-modal p-6 w-full max-w-sm"
+             @click.outside="threadToDelete = null">
+            <h2 class="text-lg font-semibold text-slate-200 mb-2">Delete Thread</h2>
+            <p class="text-sm text-slate-400 mb-4">Are you sure you want to delete this thread? This cannot be undone.</p>
+            <div class="flex justify-end gap-3">
+                <button @click="threadToDelete = null"
+                        class="px-4 py-2 text-sm text-slate-400 hover:text-slate-200">
+                    Cancel
+                </button>
+                <button @click="deleteThread()"
+                        class="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-500">
+                    Delete
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Danger Confirmation Modal -->
+    <div x-show="dangerAction" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+         @keydown.escape.window="dangerAction = null">
+        <div class="bg-slate-900 rounded-xl border border-slate-700 shadow-modal p-6 w-full max-w-sm"
+             @click.outside="dangerAction = null">
+            <h2 class="text-lg font-semibold text-red-400 mb-2">
+                <i class="fas fa-triangle-exclamation mr-1.5"></i>
+                <span x-text="dangerAction === 'deleteProject' ? 'Delete Project' : 'Delete Label'"></span>
+            </h2>
+            <p class="text-sm text-slate-400 mb-4">
+                This action is permanent and cannot be undone. Type
+                <strong class="text-slate-200" x-text="dangerAction === 'deleteProject' ? projectName : (activeLabel ? activeLabel.name : '')"></strong>
+                to confirm.
+            </p>
+            <input type="text"
+                   x-model="dangerConfirmText"
+                   class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 mb-4 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500 placeholder:text-slate-600"
+                   placeholder="Type the name to confirm">
+            <div class="flex justify-end gap-3">
+                <button @click="dangerAction = null"
+                        class="px-4 py-2 text-sm text-slate-400 hover:text-slate-200">
+                    Cancel
+                </button>
+                <button @click="executeDanger()"
+                        :disabled="dangerConfirmText !== (dangerAction === 'deleteProject' ? projectName : (activeLabel ? activeLabel.name : ''))"
+                        class="px-4 py-2 text-sm rounded-lg transition-all"
+                        :class="dangerConfirmText === (dangerAction === 'deleteProject' ? projectName : (activeLabel ? activeLabel.name : ''))
+                            ? 'bg-red-600 text-white hover:bg-red-500'
+                            : 'bg-slate-700 text-slate-500 cursor-not-allowed'">
+                    Delete permanently
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

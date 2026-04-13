@@ -58,6 +58,22 @@ from clx.models import DocketEntry
 print(DocketEntry.objects.all().count())
 ```
 
+## Data Ingestion
+
+You can bulk-add documents to a project using `add_docs()`:
+
+```python
+from clx.models import Project
+
+project = Project.objects.get(name="My Project")
+project.add_docs(["First document text", "Second document text"])
+
+# Or with metadata:
+project.add_docs([
+    {"text": "Document text", "meta": {"source": "courtlistener"}},
+])
+```
+
 ## Development
 
 Here are a few tips for setting up your development environment.
