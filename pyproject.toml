@@ -61,7 +61,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pre-commit>=4.3.0",
-  "tox-uv>=1.29.0",
+  "tox-uv>=1.35.1",
 ]
 
 [project.scripts]
